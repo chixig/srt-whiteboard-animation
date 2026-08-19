@@ -1,4 +1,4 @@
 interface:
   display_name: "SRT 白板动画"
-  short_description: "把 SRT/旁白制作成可校验、可调时序、支持横竖版与音轨的流式笔迹白板动画"
-  default_prompt: "使用 $srt-whiteboard-animation 根据这份 SRT 或旁白生成白板手绘动画；根据目标平台选择横版或竖版 profile，渲染前按 sequence 归一化时序并校验 annotation；若提供音频则合成到最终 MP4。"
+  short_description: "把 SRT/旁白制作成支持语义分幕、横竖版、批量渲染和音轨的流式笔迹白板动画"
+  default_prompt: "使用 $srt-whiteboard-animation 根据这份 SRT、旁白或脚本生成白板手绘动画：默认先做 semantic scene planning，再按目标平台选择 profile；annotation 以 sequence 为唯一绘制顺序，使用 Preview V2 或校验工具同步时序；单幕走 render_short_video.py，多幕走 render_project.py；若提供整条音频则在最终合并后 mux。"
