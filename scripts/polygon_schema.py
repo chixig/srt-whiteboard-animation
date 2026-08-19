@@ -32,6 +32,12 @@ def normalize_polygon(polygon: Any) -> list[dict[str, int]]:
 
 
 def validate_polygon(polygon: Any, width: int, height: int, *, name: str) -> list[dict]:
+    """Validate canvas-edge geometry.
+
+    Polygon coordinates describe geometry edges, so x==width / y==height are valid edge
+    coordinates even though they are not pixel indices. The renderer clips them to the
+    last output pixel when rasterizing.
+    """
     findings: list[dict] = []
     points = normalize_polygon(polygon)
     if len(points) < 3:
@@ -39,7 +45,7 @@ def validate_polygon(polygon: Any, width: int, height: int, *, name: str) -> lis
         return findings
     for i, point in enumerate(points):
         x, y = point["x"], point["y"]
-        if x < 0 or y < 0 or x >= width or y >= height:
+        if x < 0 or y < 0 or x > width or y > height:
             findings.append({
                 "severity": "error",
                 "code": "polygon.out_of_bounds",
