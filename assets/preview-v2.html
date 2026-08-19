@@ -10,7 +10,7 @@ body{display:flex;flex-direction:column}.top{display:flex;gap:10px;align-items:c
 button,input,select,textarea{font:inherit}button{background:#282d37;color:#eef;border:1px solid #3b4250;border-radius:6px;padding:6px 10px;cursor:pointer}button.primary{background:#2563eb;border-color:#2563eb}
 button:disabled{opacity:.45}.muted{color:#8f98a6;font-size:12px}.dirty{color:#f5a623;font-weight:700}.spacer{flex:1}
 .main{flex:1;display:grid;grid-template-columns:minmax(0,1fr) 340px;min-height:0}.stage{display:flex;align-items:center;justify-content:center;overflow:auto;padding:18px}
-canvas{max-width:100%;max-height:calc(100vh - 150px);background:#f5ebd7;box-shadow:0 8px 40px rgba(0,0,0,.5);touch-action:none}
+canvas,video{max-width:100%;max-height:calc(100vh - 150px);background:#f5ebd7;box-shadow:0 8px 40px rgba(0,0,0,.5)}canvas{touch-action:none}video{background:#000}
 .side{overflow:auto;background:#1a1d24;border-left:1px solid #2b303a;padding:12px}.side h3{font-size:13px;margin:10px 0 6px}.list{list-style:none;padding:0;margin:0}.list li{display:grid;grid-template-columns:26px 44px 1fr;gap:6px;align-items:center;padding:7px;border-radius:6px;background:#232832;margin-bottom:4px;cursor:grab;font-size:12px}
 .list li.sel{outline:1px solid #3b82f6;background:#17243c}.list li.drag{opacity:.35}.seq{color:#f5a623;font-weight:700}.time{color:#7fb0ff;font-variant-numeric:tabular-nums}.fields{display:grid;grid-template-columns:96px 1fr;gap:7px;align-items:center;font-size:12px}
 .fields input,.fields select,.fields textarea{width:100%;background:#252a34;color:#eef;border:1px solid #3c4350;border-radius:5px;padding:5px}.fields textarea{resize:vertical}
@@ -23,11 +23,12 @@ canvas{max-width:100%;max-height:calc(100vh - 150px);background:#f5ebd7;box-shad
 <div class="top">
   <b>Preview V2</b><span class="badge">sequence = 唯一顺序</span>
   <button id="open" class="primary">打开场景目录</button>
+  <button id="real" disabled>真实 Stream 预览</button>
   <button id="prev">‹</button><select id="scene"></select><button id="next">›</button>
   <span class="spacer"></span><span id="dirty" class="dirty"></span><button id="save">保存</button>
 </div>
 <div class="main">
-  <div class="stage"><canvas id="c"></canvas></div>
+  <div class="stage"><canvas id="c"></canvas><video id="realVideo" hidden controls></video></div>
   <aside class="side">
     <h3>自动时序</h3>
     <div class="fields">
@@ -50,8 +51,10 @@ canvas{max-width:100%;max-height:calc(100vh - 150px);background:#f5ebd7;box-shad
       <label>方向</label>
       <select id="dir"><option value="top_to_bottom">上→下</option><option value="bottom_to_top">下→上</option><option value="left_to_right">左→右</option><option value="right_to_left">右→左</option></select>
       <label>字幕</label><textarea id="sub" rows="3"></textarea>
+      <label>Polygon 顶点</label><span id="polyCount" class="muted">0</span>
     </div>
-    <p class="muted">可直接拖动画布中的区域框移动位置；宽高用右侧字段精确调整。复杂 protectedRegions 仍可用旧版预览台编辑。</p>
+    <div style="display:flex;gap:8px;margin-top:8px"><button id="makePoly">矩形→Polygon</button><button id="clearPoly">清除 Polygon</button></div>
+    <p class="muted">Polygon 模式：蓝色顶点可直接拖动；双击边附近添加顶点；右键顶点删除（至少保留 3 点）。移动 region 时 Polygon 会一起移动。真实预览文件命名为 <code>&lt;场景&gt;-preview.mp4</code>。</p>
   </aside>
 </div>
 <div class="controls">
@@ -59,15 +62,20 @@ canvas{max-width:100%;max-height:calc(100vh - 150px);background:#f5ebd7;box-shad
 </div>
 <div id="toast" class="toast"></div>
 <script>
-const $=id=>document.getElementById(id), canvas=$('c'),ctx=canvas.getContext('2d'),mask=document.createElement('canvas'),mctx=mask.getContext('2d');
+const $=id=>document.getElementById(id), canvas=$('c'),ctx=canvas.getContext('2d'),mask=document.createElement('canvas'),mctx=mask.getContext('2d'),realVideo=$('realVideo');
 const canFS='showDirectoryPicker'in window, exts=['.png','.jpg','.jpeg','.webp'];
-const S={dir:null,scenes:[],idx:-1,cfg:null,img:null,sel:0,time:0,playing:false,last:0,dirty:false,dragRow:-1,drag:null};
+const S={dir:null,scenes:[],idx:-1,cfg:null,img:null,sel:0,time:0,playing:false,last:0,dirty:false,dragRow:-1,drag:null,previewUrl:null,showReal:false};
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v)),els=()=>S.cfg?.elements||[],endMs=e=>e.reveal.startMs+e.reveal.durationMs;
 let toastTimer;function toast(msg,err=false){const t=$('toast');t.textContent=msg;t.className='toast show'+(err?' err':'');clearTimeout(toastTimer);toastTimer=setTimeout(()=>t.className='toast',2200)}
 function base(n){const e=exts.find(x=>n.toLowerCase().endsWith(x));return e?n.slice(0,-e.length):null}
 function totalMs(){return S.cfg?.sceneDurationMs||1000}
 function mark(){S.dirty=true;$('dirty').textContent='● 未保存'}
 function ordered(){return els().slice().sort((a,b)=>(a.sequence||0)-(b.sequence||0))}
+function poly(e){return Array.isArray(e?.maskPolygon)&&e.maskPolygon.length>=3?e.maskPolygon:null}
+function normPoly(e){if(!Array.isArray(e?.maskPolygon))return;e.maskPolygon=e.maskPolygon.map(p=>Array.isArray(p)?{x:+p[0],y:+p[1]}:{x:+p.x,y:+p.y}).filter(p=>Number.isFinite(p.x)&&Number.isFinite(p.y));if(e.maskPolygon.length<3)delete e.maskPolygon}
+function pathShape(g,e){const ps=poly(e);g.beginPath();if(ps){g.moveTo(ps[0].x,ps[0].y);ps.slice(1).forEach(p=>g.lineTo(p.x,p.y));g.closePath()}else{const r=e.region;g.rect(r.x,r.y,r.width,r.height)}}
+function fillShape(g,e){g.save();pathShape(g,e);g.fill();g.restore()}
+function fillPolygon(g,ps){if(!Array.isArray(ps)||ps.length<3)return;g.save();g.beginPath();const pts=ps.map(p=>Array.isArray(p)?{x:+p[0],y:+p[1]}:{x:+p.x,y:+p.y});g.moveTo(pts[0].x,pts[0].y);pts.slice(1).forEach(p=>g.lineTo(p.x,p.y));g.closePath();g.fill();g.restore()}
 function retime(){
   if(!S.cfg)return;let t=Math.max(0,+$('lead').value||0),gap=Math.max(0,+$('gap').value||0),gaze=Math.max(100,+$('gaze').value||500);
   els().forEach((e,i)=>{e.sequence=i+1;e.reveal=e.reveal||{};e.reveal.startMs=Math.round(t);e.reveal.durationMs=Math.max(100,Math.round(+e.reveal.durationMs||2000));t=e.reveal.startMs+e.reveal.durationMs+gap});
@@ -77,22 +85,22 @@ $('open').onclick=async()=>{
   if(!canFS){toast('请用 Chrome / Edge 打开，V2 需要 File System Access API',true);return}
   try{S.dir=await showDirectoryPicker({mode:'readwrite'});const files={};for await(const[n,h]of S.dir.entries())if(h.kind==='file')files[n]=h;
     const names=Object.keys(files),sc=[];for(const n of names){const b=base(n);if(!b||!files[b+'.annotation.json'])continue;
-      sc.push({name:b,img:files[n],ann:files[b+'.annotation.json']})}
+      sc.push({name:b,img:files[n],ann:files[b+'.annotation.json'],preview:files[b+'-preview.mp4']||null})}
     sc.sort((a,b)=>a.name.localeCompare(b.name,undefined,{numeric:true}));S.scenes=sc;$('scene').innerHTML=sc.map((s,i)=>`<option value="${i}">${i+1}. ${s.name}</option>`).join('');
     if(!sc.length){toast('没有找到同名 图片 + .annotation.json',true);return}load(0)
   }catch(e){if(e.name!=='AbortError')toast(e.message,true)}
 };
 $('scene').onchange=e=>load(+e.target.value);$('prev').onclick=()=>load(S.idx-1);$('next').onclick=()=>load(S.idx+1);
 async function load(i){
-  if(i<0||i>=S.scenes.length)return;pause();S.idx=i;S.sel=0;S.time=0;S.dirty=false;$('dirty').textContent='';$('scene').value=i;
-  const sc=S.scenes[i];try{const [ifile,afile]=await Promise.all([sc.img.getFile(),sc.ann.getFile()]);S.cfg=JSON.parse(await afile.text());
+  if(i<0||i>=S.scenes.length)return;pause();if(S.previewUrl){URL.revokeObjectURL(S.previewUrl);S.previewUrl=null}S.showReal=false;realVideo.hidden=true;canvas.hidden=false;realVideo.removeAttribute('src');S.idx=i;S.sel=0;S.time=0;S.dirty=false;$('dirty').textContent='';$('scene').value=i;
+  const sc=S.scenes[i];$('real').disabled=!sc.preview;try{const [ifile,afile]=await Promise.all([sc.img.getFile(),sc.ann.getFile()]);S.cfg=JSON.parse(await afile.text());if(sc.preview){const pf=await sc.preview.getFile();S.previewUrl=URL.createObjectURL(pf);realVideo.src=S.previewUrl}
     const url=URL.createObjectURL(ifile),img=new Image();img.onload=()=>{URL.revokeObjectURL(url);S.img=img;canvas.width=S.cfg.canvas?.width||img.naturalWidth;canvas.height=S.cfg.canvas?.height||img.naturalHeight;
       normalizeLoaded();renderList();syncFields();setTime(0)};img.src=url
   }catch(e){toast('加载失败：'+e.message,true)}
 }
 function normalizeLoaded(){
   S.cfg.elements=Array.isArray(S.cfg.elements)?S.cfg.elements:[];S.cfg.elements.sort((a,b)=>(a.sequence??9999)-(b.sequence??9999)||(a.reveal?.startMs??0)-(b.reveal?.startMs??0));
-  els().forEach((e,i)=>{e.sequence=i+1;e.reveal=e.reveal||{startMs:0,durationMs:2000,direction:'top_to_bottom',protectedRegions:[]};e.reveal.protectedRegions=e.reveal.protectedRegions||[]});
+  els().forEach((e,i)=>{e.sequence=i+1;e.reveal=e.reveal||{startMs:0,durationMs:2000,direction:'top_to_bottom',protectedRegions:[]};e.reveal.protectedRegions=e.reveal.protectedRegions||[];e.reveal.protectedPolygons=e.reveal.protectedPolygons||[];normPoly(e)});
   if(els().length){$('lead').value=Math.max(0,els()[0].reveal.startMs||0);const gaps=[];for(let i=1;i<els().length;i++)gaps.push(Math.max(0,els()[i].reveal.startMs-endMs(els()[i-1])));
     if(gaps.length)$('gap').value=Math.round(gaps.reduce((a,b)=>a+b,0)/gaps.length)}
 }
@@ -105,11 +113,11 @@ function renderList(){
 }
 function syncFields(){const e=els()[S.sel],on=!!e;['label','x','y','w','h','start','dur','end','dir','sub'].forEach(id=>$(id).disabled=!on||['start','end'].includes(id));
   if(!on)return;$('label').value=e.label||'';$('x').value=Math.round(e.region.x);$('y').value=Math.round(e.region.y);$('w').value=Math.round(e.region.width);$('h').value=Math.round(e.region.height);
-  $('start').value=e.reveal.startMs;$('dur').value=e.reveal.durationMs;$('end').value=endMs(e);$('dir').value=e.reveal.direction||'top_to_bottom';$('sub').value=e.subtitle||''
+  $('start').value=e.reveal.startMs;$('dur').value=e.reveal.durationMs;$('end').value=endMs(e);$('dir').value=e.reveal.direction||'top_to_bottom';$('sub').value=e.subtitle||'';$('polyCount').textContent=poly(e)?.length||0
 }
 function apply(){
-  const e=els()[S.sel];if(!e)return;const W=canvas.width,H=canvas.height;e.label=$('label').value;e.region.x=clamp(Math.round(+$('x').value||0),0,W-1);e.region.y=clamp(Math.round(+$('y').value||0),0,H-1);
-  e.region.width=clamp(Math.round(+$('w').value||1),1,W-e.region.x);e.region.height=clamp(Math.round(+$('h').value||1),1,H-e.region.y);e.reveal.durationMs=Math.max(100,Math.round(+$('dur').value||100));
+  const e=els()[S.sel];if(!e)return;const W=canvas.width,H=canvas.height,old={...e.region};e.label=$('label').value;const nr={x:clamp(Math.round(+$('x').value||0),0,W-1),y:clamp(Math.round(+$('y').value||0),0,H-1)};
+  nr.width=clamp(Math.round(+$('w').value||1),1,W-nr.x);nr.height=clamp(Math.round(+$('h').value||1),1,H-nr.y);const ps=poly(e);if(ps&&old.width>0&&old.height>0)ps.forEach(p=>{p.x=clamp(Math.round(nr.x+(p.x-old.x)*nr.width/old.width),0,W-1);p.y=clamp(Math.round(nr.y+(p.y-old.y)*nr.height/old.height),0,H-1)});e.region=nr;e.reveal.durationMs=Math.max(100,Math.round(+$('dur').value||100));
   e.reveal.direction=$('dir').value;e.subtitle=$('sub').value;retime();render()
 }
 ['label','x','y','w','h','dur','dir','sub'].forEach(id=>$(id).addEventListener('input',apply));['lead','gap','gaze'].forEach(id=>$(id).addEventListener('input',retime));
@@ -119,20 +127,27 @@ function revealRect(e,p){const r=e.region,d=e.reveal.direction;if(d==='left_to_r
 function render(){
   if(!S.cfg||!S.img)return;const W=canvas.width,H=canvas.height;ctx.fillStyle='#f5ebd7';ctx.fillRect(0,0,W,H);const arr=ordered();
   if(!S.playing&&S.time===0){ctx.drawImage(S.img,0,0,W,H)}else{mask.width=W;mask.height=H;mctx.clearRect(0,0,W,H);
-    arr.forEach((e,i)=>{const p=progress(S.time,e);if(p<=0)return;const[x,y,w,h]=revealRect(e,p);mctx.save();mctx.beginPath();mctx.rect(x,y,w,h);mctx.clip();mctx.drawImage(S.img,0,0,W,H);mctx.restore();
-      mctx.save();mctx.globalCompositeOperation='destination-out';arr.slice(i+1).forEach(l=>mctx.fillRect(l.region.x,l.region.y,l.region.width,l.region.height));(e.reveal.protectedRegions||[]).forEach(r=>mctx.fillRect(r.x,r.y,r.width,r.height));mctx.restore()});
+    arr.forEach((e,i)=>{const p=progress(S.time,e);if(p<=0)return;const[x,y,w,h]=revealRect(e,p);mctx.save();pathShape(mctx,e);mctx.clip();mctx.beginPath();mctx.rect(x,y,w,h);mctx.clip();mctx.drawImage(S.img,0,0,W,H);mctx.restore();
+      mctx.save();mctx.globalCompositeOperation='destination-out';mctx.fillStyle='#000';arr.slice(i+1).forEach(l=>fillShape(mctx,l));(e.reveal.protectedRegions||[]).forEach(r=>mctx.fillRect(r.x,r.y,r.width,r.height));(e.reveal.protectedPolygons||[]).forEach(ps=>fillPolygon(mctx,ps));mctx.restore()});
     ctx.drawImage(mask,0,0)}
-  arr.forEach((e,i)=>{const r=e.region;ctx.save();ctx.strokeStyle=i===S.sel?'#3b82f6':'#e97036';ctx.lineWidth=i===S.sel?4:2;ctx.strokeRect(r.x,r.y,r.width,r.height);ctx.fillStyle=ctx.strokeStyle;ctx.font=`${Math.max(14,W/70)}px sans-serif`;ctx.fillText(String(i+1),r.x+6,r.y+20);ctx.restore()})
+  arr.forEach((e,i)=>{const r=e.region,ps=poly(e);ctx.save();ctx.strokeStyle=i===S.sel?'#3b82f6':'#e97036';ctx.lineWidth=i===S.sel?4:2;if(ps){pathShape(ctx,e);ctx.stroke()}else ctx.strokeRect(r.x,r.y,r.width,r.height);ctx.fillStyle=ctx.strokeStyle;ctx.font=`${Math.max(14,W/70)}px sans-serif`;ctx.fillText(String(i+1),r.x+6,r.y+20);if(i===S.sel&&ps)ps.forEach(p=>{ctx.beginPath();ctx.arc(p.x,p.y,Math.max(5,W/180),0,Math.PI*2);ctx.fill()});ctx.restore()})
 }
 function point(ev){const b=canvas.getBoundingClientRect();return{x:(ev.clientX-b.left)*canvas.width/b.width,y:(ev.clientY-b.top)*canvas.height/b.height}}
-canvas.onpointerdown=ev=>{const p=point(ev);for(let i=els().length-1;i>=0;i--){const r=els()[i].region;if(p.x>=r.x&&p.x<=r.x+r.width&&p.y>=r.y&&p.y<=r.y+r.height){S.sel=i;S.drag={p,base:{...r}};canvas.setPointerCapture(ev.pointerId);syncFields();renderList();return}}};
-canvas.onpointermove=ev=>{if(!S.drag)return;const p=point(ev),e=els()[S.sel],r=e.region,dx=p.x-S.drag.p.x,dy=p.y-S.drag.p.y;r.x=clamp(Math.round(S.drag.base.x+dx),0,canvas.width-r.width);r.y=clamp(Math.round(S.drag.base.y+dy),0,canvas.height-r.height);syncFields();mark();render()};
+function nearVertex(e,p){const ps=poly(e);if(!ps)return-1;const tol=Math.max(14,canvas.width/80);let best=-1,bd=1e9;ps.forEach((q,i)=>{const d=Math.hypot(q.x-p.x,q.y-p.y);if(d<bd){bd=d;best=i}});return bd<=tol?best:-1}
+canvas.onpointerdown=ev=>{const p=point(ev),cur=els()[S.sel];if(cur){const vi=nearVertex(cur,p);if(vi>=0){S.drag={kind:'vertex',vi};canvas.setPointerCapture(ev.pointerId);return}}for(let i=els().length-1;i>=0;i--){const r=els()[i].region;if(p.x>=r.x&&p.x<=r.x+r.width&&p.y>=r.y&&p.y<=r.y+r.height){S.sel=i;S.drag={kind:'region',p,base:{...r},poly:poly(els()[i])?poly(els()[i]).map(q=>({...q})):null};canvas.setPointerCapture(ev.pointerId);syncFields();renderList();render();return}}};
+canvas.onpointermove=ev=>{if(!S.drag)return;const p=point(ev),e=els()[S.sel],r=e.region;if(S.drag.kind==='vertex'){const q=poly(e)[S.drag.vi];q.x=clamp(Math.round(p.x),0,canvas.width-1);q.y=clamp(Math.round(p.y),0,canvas.height-1)}else{const dx=p.x-S.drag.p.x,dy=p.y-S.drag.p.y,nx=clamp(Math.round(S.drag.base.x+dx),0,canvas.width-r.width),ny=clamp(Math.round(S.drag.base.y+dy),0,canvas.height-r.height),adx=nx-S.drag.base.x,ady=ny-S.drag.base.y;r.x=nx;r.y=ny;if(S.drag.poly)S.drag.poly.forEach((q,i)=>{e.maskPolygon[i].x=clamp(Math.round(q.x+adx),0,canvas.width-1);e.maskPolygon[i].y=clamp(Math.round(q.y+ady),0,canvas.height-1)})}syncFields();mark();render()};
 canvas.onpointerup=()=>S.drag=null;
+function segDist(p,a,b){const vx=b.x-a.x,vy=b.y-a.y,wx=p.x-a.x,wy=p.y-a.y,c=vx*vx+vy*vy,t=c?clamp((wx*vx+wy*vy)/c,0,1):0,q={x:a.x+t*vx,y:a.y+t*vy};return Math.hypot(p.x-q.x,p.y-q.y)}
+canvas.ondblclick=ev=>{const e=els()[S.sel],ps=poly(e);if(!ps)return;const p=point(ev);let bi=0,bd=1e9;for(let i=0;i<ps.length;i++){const d=segDist(p,ps[i],ps[(i+1)%ps.length]);if(d<bd){bd=d;bi=i}}ps.splice(bi+1,0,{x:clamp(Math.round(p.x),0,canvas.width-1),y:clamp(Math.round(p.y),0,canvas.height-1)});syncFields();mark();render()};
+canvas.oncontextmenu=ev=>{const e=els()[S.sel],ps=poly(e);if(!ps||ps.length<=3)return;const p=point(ev),vi=nearVertex(e,p);if(vi>=0){ev.preventDefault();ps.splice(vi,1);syncFields();mark();render()}};
 function setTime(v){S.time=clamp(v,0,totalMs());$('timeline').value=totalMs()?Math.round(S.time/totalMs()*1000):0;$('clock').textContent=`${(S.time/1000).toFixed(2)} / ${(totalMs()/1000).toFixed(2)}s`;render()}
 $('timeline').oninput=e=>{pause();setTime(+e.target.value/1000*totalMs())};$('play').onclick=()=>S.playing?pause():play();
 function play(){if(!S.cfg)return;if(S.time>=totalMs())S.time=0;S.playing=true;$('play').textContent='⏸';S.last=performance.now();requestAnimationFrame(tick)}
 function pause(){S.playing=false;$('play').textContent='▶'}
 function tick(ts){if(!S.playing)return;const dt=ts-S.last;S.last=ts;setTime(S.time+dt);if(S.time>=totalMs()){pause();return}requestAnimationFrame(tick)}
+$('makePoly').onclick=()=>{const e=els()[S.sel];if(!e)return;const r=e.region;e.maskPolygon=[{x:r.x,y:r.y},{x:r.x+r.width,y:r.y},{x:r.x+r.width,y:r.y+r.height},{x:r.x,y:r.y+r.height}];syncFields();mark();render()};
+$('clearPoly').onclick=()=>{const e=els()[S.sel];if(!e)return;delete e.maskPolygon;syncFields();mark();render()};
+$('real').onclick=()=>{if(!S.scenes[S.idx]?.preview){toast('当前场景没有 -preview.mp4',true);return}S.showReal=!S.showReal;canvas.hidden=S.showReal;realVideo.hidden=!S.showReal;$('real').textContent=S.showReal?'返回代理预览':'真实 Stream 预览';if(S.showReal)realVideo.play().catch(()=>{})};
 $('save').onclick=async()=>{if(!S.cfg||S.idx<0)return;retime();try{const h=S.scenes[S.idx].ann;if(h.requestPermission){const p=await h.requestPermission({mode:'readwrite'});if(p!=='granted')throw Error('未授权写入')}
   const w=await h.createWritable();await w.write(JSON.stringify(S.cfg,null,2));await w.close();S.dirty=false;$('dirty').textContent='';toast('已保存并同步 sequence/startMs')}catch(e){toast('保存失败：'+e.message,true)}};
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
