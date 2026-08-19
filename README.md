@@ -1,8 +1,8 @@
 # SRT 白板动画 Skill
 
-将 SRT 字幕转为按叙事顺序绘制的白板手绘视频Skill。它结合了**分区遮罩编排**与**流式笔迹绘制**：每个元素跟随字幕依次出场，笔尖在区域内连续落墨，再逐步添彩，最终导出 MP4。
+将 SRT、旁白或脚本转换为按叙事顺序绘制的白板手绘动画。项目保留原有 **分区遮罩编排 + 流式笔迹绘制** 的核心，同时在本 fork 中补上了更适合生产使用的时序规范化、9:16/16:9 profile、音轨合成、跨平台字体和基础校验。
 
-适合把知识讲解、故事口播、课程字幕或短视频文案制作成暖米黄色纸张底的手绘动画。
+> 本仓库 fork 自 `geeklee/srt-whiteboard-animation`，继续遵循 MIT License。底层 stream renderer 仍保持兼容，新能力主要集中在编排、配置、校验与合成层，便于后续继续同步上游。
 
 ## 效果示例
 
@@ -12,158 +12,316 @@
 
 原始线稿：[查看 PNG](examples/scene-01-monkey-mountain.png)。
 
-## 核心能力
+## 本 fork 的主要升级
 
-- 解析 SRT 字幕，并按建议的 25–35 秒时长拆分场景
-- 先输出分镜与配图策略，确保每一幕只表达一个核心意思
-- 按字幕事件而非画面坐标，为元素建立语义化的绘制顺序
-- 用 `annotation.json` 管理区域、时序、字幕关联和重叠保护区
-- 每个区域采用连续流式笔迹：先 `ink` 铺线稿，再 `color` 添彩
-- 支持浏览器预览台调整区域、顺序、时间和字幕关联
-- 支持逐幕渲染与多幕合并，输出完整 MP4
+- `sequence` 作为唯一绘制顺序来源；渲染前自动重建串行 `startMs`
+- 新增 `scripts/annotation_tools.py`：时序归一化 + annotation 校验
+- 新增 `scripts/render_short_video.py`：生产级统一渲染入口
+- 新增 `profiles/vertical-short-video.json`：9:16 / 1080×1920
+- 新增 `profiles/landscape-standard.json`：16:9 / 1920×1080
+- 新增 `scripts/mux_audio.py`：旁白/原声合成到最终 MP4
+- `prepare_env.py` 增加 `imageio-ffmpeg`，没有系统 ffmpeg 也能取得可用 ffmpeg 二进制
+- `render_annotation_preview.py` 改为跨 Windows/macOS/Linux 的中文字体探测
+- 新增 `requirements.txt`
+- 新增基础单元测试与 GitHub Actions CI
+- Skill 工作流支持 `interactive` 与 `autopilot`，不再把逐步确认写死
 
-## 工作方式
+## 核心架构
 
-该 Skill 的关键在于“字幕驱动、逐步确认”。每一步完成后都等待确认，避免在分镜、线稿或标注尚未定稿时浪费渲染成本：
+这套 Skill 分成三层：
 
-1. 解析 SRT，输出分镜与配图策略。
-2. 确认后生成统一风格的线稿。
-3. 确认线稿后，结合字幕和原图创建标注，并载入预览台。
-4. 确认标注后，生成分区与方向检查图。
-5. 在预览台调整区域、叙事顺序、时序和字幕关联并保存。
-6. 确认最终标注后，逐幕渲染 MP4。
-7. 多幕项目在确认各幕成片后合并。
+```text
+SRT / 旁白 / 脚本
+        ↓
+叙事分镜 + annotation.json
+        ↓
+sequence → 时间轴归一化 → 校验
+        ↓
+mask 编排 + stream 笔迹 renderer
+        ↓
+H.264 MP4
+        ↓
+可选旁白/原声音轨 mux
+```
 
-## 视觉规范
+其中：
 
-- 暖米黄色纸张背景：建议 `#F5EBD7`
-- 深灰色素描线条，红、橙、蓝仅作少量概念性点缀
-- 极简手绘、干净背景与充足留白
-- 不使用场景文字、标签、摄影感、3D 效果或复杂纹理
+- SRT 决定“说什么、什么时候说”
+- `annotation.json` 决定“哪个元素对应哪个叙事事件”
+- `sequence` 决定“画什么先、画什么后”
+- `startMs` 是执行时间轴，由生产流程自动生成
 
-## 安装与环境
+## 为什么要修 sequence / startMs
 
-Skill 自带独立的 Python 虚拟环境准备脚本。首次运行时执行：
+原版预览台拖动模块顺序时会更新 `sequence`，但底层渲染器实际按 `reveal.startMs` 排序，因此存在两个顺序来源。
+
+本 fork 不直接重写底层 77KB stream renderer，而是在生产入口前做规范化：
+
+```text
+sequence
+  ↓
+保留 durationMs
+  ↓
+自动重建 startMs
+  ↓
+得到无重叠串行时间轴
+  ↓
+交给原 renderer
+```
+
+这样既修复了真实成片顺序，又尽量减少对底层算法的侵入。
+
+## 安装
+
+推荐：
 
 ```bash
-python scripts/prepare_env.py --check
 python scripts/prepare_env.py
 ```
 
-成功后第一条命令会输出 `ENV_PY=<路径>`；后续渲染请使用该解释器，确保依赖隔离。
+也可以标准安装：
 
-## 项目素材结构
-
-```text
-assets/whiteboard/<项目名>/
-├── scene-01-<名称>.png
-├── scene-01-<名称>.annotation.json
-├── scene-01-<名称>-whiteboard.mp4
-└── scene-01-<名称>-preview.mp4
+```bash
+pip install -r requirements.txt
 ```
 
-图片与标注必须同名，例如 `scene-01-demo.png` 对应 `scene-01-demo.annotation.json`。
+运行时依赖：
+
+- opencv-python
+- numpy
+- av
+- Pillow
+- imageio-ffmpeg
+
+## 9:16 竖版渲染
+
+源图和 `annotation.canvas` 应为同一 9:16 像素尺寸，例如 1080×1920：
+
+```bash
+python scripts/render_short_video.py \
+  scene.png \
+  scene.annotation.json \
+  scene.mp4 \
+  --profile vertical-short-video
+```
+
+竖版 profile 默认：
+
+- 1080×1920 目标比例
+- 30 FPS
+- 长边 1920
+- `skeleton` 笔迹
+- `contour-wipe` 上色
+- 统一纸张色 `#F5EBD7`
+
+渲染器保持输入图片比例，不会强行拉伸。如果需要严格限制比例，可加：
+
+```bash
+--strict-aspect
+```
+
+## 16:9 横版渲染
+
+```bash
+python scripts/render_short_video.py \
+  scene.png \
+  scene.annotation.json \
+  scene.mp4 \
+  --profile landscape-standard
+```
+
+## 合成旁白 / 原声
+
+直接在最终渲染时传音频：
+
+```bash
+python scripts/render_short_video.py \
+  scene.png \
+  scene.annotation.json \
+  scene-final.mp4 \
+  --profile vertical-short-video \
+  --audio narration.mp3
+```
+
+默认 `--audio-fit video`：音频不足时尾部补静音，以视频长度为准。
+
+也可以单独给已有 MP4 加音轨：
+
+```bash
+python scripts/mux_audio.py silent.mp4 narration.mp3 final.mp4
+```
+
+音频合成优先寻找系统 `ffmpeg`；如果不存在，则使用 `imageio-ffmpeg` 提供的二进制。
+
+## annotation 时序归一化
+
+如果需要把规范化结果直接写回 JSON：
+
+```bash
+python scripts/annotation_tools.py scene.annotation.json \
+  --normalize \
+  --mode sequence \
+  --gap-ms 180 \
+  --in-place
+```
+
+主要处理：
+
+- 按 `sequence` 重排 elements
+- 自动重新编号为 1..N
+- 保留 `durationMs`
+- 重建不重叠 `startMs`
+- 保证 `sceneDurationMs` 覆盖最后绘制和结尾凝视
+- 校验画布、区域、protectedRegions、时长和时间轴
+
+`render_short_video.py` 已经内置这一过程，正常生产时无需先手工执行。
 
 ## 标注格式
-
-每个元素使用原图的整数像素坐标，并通过 `sequence`、`subtitle` 与 `narrativeRole` 关联字幕中的事件。区域应按“场景铺垫 → 关键人物/物体 → 动作或变化 → 反应/结果”排序。
 
 ```json
 {
   "sceneId": "scene-01",
-  "canvas": { "width": 1672, "height": 941 },
-  "storyBasis": "小猴在猴子山上拿着香蕉，大猴抢走香蕉，孩子们在旁观看。",
+  "canvas": {"width": 1080, "height": 1920},
   "sceneDurationMs": 9000,
   "elements": [
     {
-      "id": "rockery",
-      "label": "猴子山场景",
+      "id": "subject-a",
+      "label": "主体 A",
       "sequence": 1,
-      "narrativeRole": "故事的场景铺垫",
-      "subtitle": "小猴子坐在猴子山顶，手里拿着香蕉。",
-      "type": "structure",
-      "region": { "x": 20, "y": 120, "width": 540, "height": 780 },
+      "narrativeRole": "场景铺垫",
+      "subtitle": "对应字幕",
+      "type": "subject",
+      "region": {"x": 80, "y": 220, "width": 600, "height": 700},
       "reveal": {
         "direction": "top_to_bottom",
-        "startMs": 300,
-        "durationMs": 2600,
+        "startMs": 250,
+        "durationMs": 2200,
         "maskPaddingPx": 22,
         "protectedRegions": []
       },
-      "handPath": { "start": [290, 130], "end": [290, 890], "easing": "easeInOut" }
+      "handPath": {
+        "start": [380, 250],
+        "end": [380, 880],
+        "easing": "easeInOut"
+      }
     }
   ]
 }
 ```
 
-`direction` 和 `handPath` 用于预览台的矩形代理；最终成片的真实笔迹由流式绘制器自动生成。对于相互遮挡的对象，在较早元素的 `protectedRegions` 中标出需要延后显示的区域，避免后续内容提前露出。
+字段关系：
 
-## 常用命令
+- `sequence`：权威顺序
+- `durationMs`：元素绘制预算
+- `startMs`：可自动生成的执行字段
+- `direction` / `handPath`：主要用于矩形代理预览
+- `protectedRegions`：防止后绘元素提前泄露
 
-解析字幕并生成建议分镜：
+## Mask 不变量
 
-```bash
-python scripts/parse_srt.py <字幕.srt> --target-sec 30 --min-sec 25 --max-sec 35
+对元素 `E_i`：
+
+```text
+allowed(E_i)
+= region(E_i)
+- union(region(E_j), j > i)
+- protectedRegions(E_i)
 ```
 
-生成区域检查图：
+这里的 `j > i` 使用归一化后的绘制顺序。
 
-```bash
-python scripts/render_annotation_preview.py <图片路径> <标注路径> <预览图输出路径>
+## 编辑与检查
+
+浏览器区域编辑器仍位于：
+
+```text
+assets/preview.html
 ```
 
-打开 `assets/preview.html`，使用“打开文件夹”载入场景目录，即可编辑区域、顺序、时间与字幕关联。
+它可以调整区域、字幕、顺序和时间。
 
-渲染单幕：
+保存后推荐直接走 `render_short_video.py`，由生产入口再次根据 `sequence` 归一化时间轴，避免 UI 中残留的历史 `startMs` 影响最终成片。
 
-```bash
-<ENV_PY> scripts/render_stream_whiteboard.py <图片路径> <标注路径> <输出.mp4> assets/drawing-hand.png \
-  --ink-path grid --color-fill contour-wipe
-```
-
-合并多幕：
+区域检查图：
 
 ```bash
-<ENV_PY> scripts/merge_scenes.py --inputs 幕1.mp4 幕2.mp4 幕3.mp4 --output final.mp4
+python scripts/render_annotation_preview.py \
+  scene.png scene.annotation.json scene-preview.png
 ```
 
-## 质量检查
+中文字体现在会跨平台自动探测，也可以强制指定：
 
-- 首帧是干净的暖米黄纸张底色，没有提前露出的线条
-- `canvas` 与原图尺寸一致，所有区域都是画布内的整数像素坐标
-- `sequence`、`startMs` 与字幕的叙事顺序一致
-- 中段帧中，未开始区域和保护区不会提前出现
-- 笔尖贴近当前流式笔迹；线稿清晰时可选择 `--ink-path skeleton`
-- 每幕结束后至少停留 0.5 秒完整画面；多幕合并顺序与字幕分镜一致
+```bash
+SRT_WHITEBOARD_FONT=/path/to/font.ttf python scripts/render_annotation_preview.py ...
+```
 
-## 仓库内容
+## SRT 分镜
+
+```bash
+python scripts/parse_srt.py input.srt --target-sec 30 --min-sec 25 --max-sec 35
+```
+
+时间切分只作为候选分镜。实际 Agent 工作流还应结合完整句、话题变化、因果/转折和人物/场景变化做语义微调，避免机械地按 30 秒切断叙事。
+
+## 多幕合并
+
+```bash
+python scripts/merge_scenes.py --inputs scene-01.mp4 scene-02.mp4 scene-03.mp4 --output final.mp4
+```
+
+## 测试
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+当前测试覆盖：
+
+- `sequence` 成为 canonical order
+- 重排后 `startMs` 自动串行化
+- region 越界检测
+
+GitHub Actions 会在 push / PR 时执行脚本语法检查和这些单元测试。
+
+## 仓库结构
 
 ```text
 srt-whiteboard-animation/
-├── SKILL.md                         # 完整工作流与约束
+├── SKILL.md
+├── README.md
+├── requirements.txt
+├── profiles/
+│   ├── vertical-short-video.json
+│   └── landscape-standard.json
 ├── assets/
-│   ├── drawing-hand.png              # 手部素材
-│   ├── preview.html                  # 本地编辑预览台
-├── examples/                         # README 案例素材
+│   ├── drawing-hand.png
+│   └── preview.html
 ├── scripts/
-│   ├── parse_srt.py                  # 字幕解析与分镜建议
-│   ├── render_annotation_preview.py  # 标注检查图
-│   ├── render_stream_whiteboard.py   # 流式笔迹 MP4 渲染器
-│   ├── merge_scenes.py               # 多幕合并
-│   └── prepare_env.py                # 依赖环境准备
-└── agents/openai.yaml                # Codex 元数据
+│   ├── parse_srt.py
+│   ├── annotation_tools.py
+│   ├── render_annotation_preview.py
+│   ├── render_stream_whiteboard.py
+│   ├── render_short_video.py
+│   ├── mux_audio.py
+│   ├── merge_scenes.py
+│   └── prepare_env.py
+├── tests/
+│   └── test_annotation_tools.py
+└── agents/openai.yaml
 ```
 
-## 贡献
+## 兼容性策略
 
-欢迎提交 Issue 或 Pull Request。任何涉及绘制逻辑的改动，都应使用真实的字幕、标注和成片检查遮罩保护、时序与最终画面。
+原 `render_stream_whiteboard.py`、`stream_render.py`、`merge_scenes.py` 均保留。
+
+新能力通过包装层组合已有 renderer，而不是直接大面积修改底层算法。这样未来从上游同步 stream/path 算法时，冲突更少。
 
 ## 许可证
 
-本项目基于 MIT License 开源，详见 [LICENSE](LICENSE)。
+MIT License，详见 [LICENSE](LICENSE)。
 
-## 关于作者
+## 上游作者
 
-一个爱养鱼的老登 / AI Builder / 用 AI 团队打造一人公司。
+原项目作者：一个爱养鱼的老登 / AI Builder / 用 AI 团队打造一人公司。
 
 抖音、B站、公众号：江哥是老登啊
