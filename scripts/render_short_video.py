@@ -2,8 +2,8 @@
 """Production wrapper for SRT whiteboard animation.
 
 Adds deterministic sequence-based timing, annotation validation, reusable profiles,
-9:16/16:9 production presets and optional audio muxing without rewriting the
-underlying stream renderer.
+9:16/16:9 production presets, polygon-aware masks and optional audio muxing without
+rewriting the underlying stream renderer.
 """
 from __future__ import annotations
 
@@ -17,9 +17,11 @@ _ROOT = _SCRIPT_DIR.parent
 sys.path.insert(0, str(_SCRIPT_DIR))
 
 import annotation_tools as at  # noqa: E402
+import polygon_schema as ps  # noqa: E402
 import render_stream_whiteboard as rsw  # noqa: E402
 import stream_render as sr  # noqa: E402
 from mux_audio import mux_audio  # noqa: E402
+from polygon_renderer import PolygonRegionStreamRenderer  # noqa: E402
 
 PROFILE_DIR = _ROOT / "profiles"
 PROFILE_KEYS = {
@@ -77,7 +79,7 @@ def _aspect_warning(profile: dict, width: int, height: int, strict: bool) -> Non
 
 
 def _parse_args(argv=None):
-    p = argparse.ArgumentParser(description="白板动画生产包装器：时序归一化 + profile + 音频")
+    p = argparse.ArgumentParser(description="白板动画生产包装器：时序归一化 + profile + Polygon + 音频")
     p.add_argument("image", help="线稿图")
     p.add_argument("annotation", help="annotation.json")
     p.add_argument("output", help="最终 MP4")
@@ -142,6 +144,7 @@ def main(argv=None) -> int:
         )
 
     findings = at.validate_annotation(annotation, image_size=(w, h))
+    findings.extend(ps.validate_polygon_fields(annotation))
     for finding in findings:
         prefix = "ERR" if finding["severity"] == "error" else "WARN"
         element = f" [{finding['element']}]" if finding.get("element") else ""
@@ -159,10 +162,11 @@ def main(argv=None) -> int:
     video_only = out if not args.audio else out.with_name(out.stem + "_video.mp4")
 
     hand_png = Path(args.hand) if args.hand else None
-    renderer = rsw.RegionStreamRenderer(image, annotation, cfg, hand_png, args.bare_tip)
+    renderer = PolygonRegionStreamRenderer(image, annotation, cfg, hand_png, args.bare_tip)
+    polygon_count = sum(1 for e in annotation["elements"] if e.get("maskPolygon"))
     print(f"[profile] {profile.get('name', args.profile)}")
     print(f"[render] {renderer.out_w}x{renderer.out_h} @ {cfg.fps}fps, canvas={cfg.canvas_hex}")
-    print(f"[timeline] mode={args.timeline_mode}, elements={len(annotation['elements'])}, total={total_ms}ms")
+    print(f"[timeline] mode={args.timeline_mode}, elements={len(annotation['elements'])}, polygons={polygon_count}, total={total_ms}ms")
 
     renderer.render_to(raw, total_ms)
     final_video = sr.transcode_h264(raw, video_only)
