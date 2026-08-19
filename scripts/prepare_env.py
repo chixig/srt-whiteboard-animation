@@ -14,7 +14,6 @@
 """
 from __future__ import annotations
 
-import os
 import subprocess
 import sys
 import venv
@@ -28,8 +27,9 @@ VENV_ROOT = SKILL_ROOT / ".venv"
 DEPS: dict[str, str] = {
     "cv2": "opencv-python",
     "numpy": "numpy",
-    "av": "av",  # PyAV：纯 pip 安装的 H.264 编码，无需系统 ffmpeg
-    "PIL": "Pillow",  # render_annotation_preview.py 画区域编号预览图（含中文标签）
+    "av": "av",  # PyAV：系统无 ffmpeg 时仍可完成 H.264 转码
+    "PIL": "Pillow",  # render_annotation_preview.py 区域编号预览图
+    "imageio_ffmpeg": "imageio-ffmpeg",  # 自带 ffmpeg 二进制，用于音轨 mux
 }
 
 
@@ -82,7 +82,6 @@ def install(py: Path, packages: list[str]) -> bool:
 
 def main() -> None:
     check_only = "--check" in sys.argv
-
     py = ensure_venv(check_only)
 
     missing: list[str] = []
@@ -100,7 +99,6 @@ def main() -> None:
         if not install(py, missing):
             sys.exit(1)
 
-    # 末行：供调用方捕获的约定输出
     print(f"\nENV_PY={py}")
 
 
