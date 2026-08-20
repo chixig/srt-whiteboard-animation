@@ -1,88 +1,81 @@
 # SRT Whiteboard Animation · Production Fork
 
-把 **SRT / 旁白 / 脚本** 转成按叙事顺序绘制的白板手绘视频。
+把 **SRT / 旁白 / 脚本** 转成按叙事顺序绘制、带字幕与完整音轨的白板手绘视频。
 
-本仓库 fork 自 `geeklee/srt-whiteboard-animation`，保留上游最有价值的 **分区遮罩 + stream 连续笔迹 renderer**，并在外围补上短视频生产需要的语义分幕、9:16、Polygon 遮罩、真实低清预览、批量渲染、音频合成、校验和 CI。
+本仓库 fork 自 `geeklee/srt-whiteboard-animation`。上游最有价值的 **mask 分区编排 + stream 连续笔迹 renderer** 继续保留；本 fork 主要在外围增加生产能力，尽量不重写 `stream_render.py`，以便继续同步上游。
 
-> 设计目标不是重写上游笔迹算法，而是把它变成一个更稳定、可编排、可批处理的 Whiteboard Video Skill。
-
-## 当前生产链路
+## 当前完整链路
 
 ```text
 SRT / 脚本 / 旁白
-        │
-        ▼
+        ↓
 parse_srt.py --mode semantic
 时长 + 标点 + 停顿 + 转折的分幕建议
-        │
-        ▼
+        ↓
 Agent narrative review / storyboard
-        │
-        ▼
+        ↓
 image generation
-        │
-        ├── suggest_regions.py
-        │   CV visual proposals: region + maskPolygon
-        ▼
+        ↓
+suggest_regions.py
+CV proposal: region + maskPolygon
+        ↓
+字幕 + 图片语义匹配
+        ↓
 annotation.json
 sequence = 唯一绘制顺序
-        │
-        ▼
+        ↓
 preview-v2.html
 时序 / region / Polygon 可视化调整
-        │
-        ▼
+        ↓
 annotation + polygon validation
-        │
-        ├── render_preview.py
-        │   同一 renderer 的低清真实 stream 预览
-        ▼
-render_short_video.py
-Polygon-aware production renderer
-        │
-        ├── render_project.py 多幕批处理
-        ▼
-merge + audio mux
-        │
-        ▼
+        ↓
+render_preview.py
+同一 renderer 的真实低清 stream QC
+        ↓
+render_short_video.py / render_project.py
+高清 Polygon-aware 白板渲染
+        ↓
+assemble_media.py
+旁白 + BGM ducking + SFX + 字幕 + 时长校准
+        ↓
 final MP4
 ```
 
-## 这版解决了什么
+## 主要升级
 
-- `sequence` 与 `startMs` 不再形成两套绘制顺序；
-- 支持 9:16 / 16:9 profile；
-- SRT 分幕从纯时长升级为确定性语义感知边界；
-- Preview V2 拖动顺序会立刻重建时间轴；
-- 支持 `maskPolygon` / `protectedPolygons`，复杂重叠不再只能靠粗矩形；
-- 新增 CV 区域/Polygon proposal，但明确不把视觉连通域冒充语义理解；
-- 新增真实低清 stream preview，质量判断不再只看矩形代理；
-- 支持单幕音频、整条旁白、多幕批量渲染；
-- 修复跨平台中文字体；
-- 增加 annotation / Polygon 校验、运行时测试和 GitHub Actions。
+- `sequence` 成为唯一绘制顺序，`startMs` 自动派生；
+- 9:16 / 16:9 profile；
+- SRT 从纯时长分幕升级为确定性语义感知边界；
+- Preview V2 拖动顺序后立即重建时间轴；
+- `maskPolygon` / `protectedPolygons` 进入真实 renderer；
+- OpenCV 自动给出 region / Polygon proposal，但不冒充语义理解；
+- 真实低清 stream preview 与最终 renderer 同源；
+- 多场景自然排序、批量渲染、manifest；
+- 旁白、BGM 自动 ducking、annotation 驱动 SFX、字幕烧录；
+- 最终音视频自动按视频时长 trim/pad，并检查 duration drift；
+- 跨平台中文字体、annotation/Polygon 校验、运行时 CI。
 
 ---
 
 # 1. sequence 是唯一绘制顺序
 
-新版默认模型：
-
 ```text
 sequence
 → duration + gap + lead-in
-→ 自动派生 startMs
+→ startMs
 → validation
 → renderer
 ```
 
-生产入口：
+推荐入口：
 
 ```bash
-python scripts/render_short_video.py scene.png scene.annotation.json scene.mp4 \
+python scripts/render_short_video.py \
+  scene.png scene.annotation.json scene.mp4 \
   --profile vertical-short-video
 ```
 
-旧 annotation 仍兼容。只有明确需要复现历史 `startMs` 时才使用：
+只有兼容旧数据时才考虑：
 
 ```bash
 --timeline-mode startMs --no-retime
@@ -92,8 +85,6 @@ python scripts/render_short_video.py scene.png scene.annotation.json scene.mp4 \
 
 # 2. SRT 语义分幕
 
-默认：
-
 ```bash
 python scripts/parse_srt.py narration.srt \
   --mode semantic \
@@ -102,16 +93,9 @@ python scripts/parse_srt.py narration.srt \
   --max-sec 35
 ```
 
-`semantic` 是**离线确定性启发式算法**，综合：
+`semantic` 是离线确定性启发式，综合：目标时长、句末标点、字幕间停顿、转折/阶段词。输出 `boundaryReason`，供 Agent 继续检查完整事件、因果关系和叙事节奏。
 
-- 与目标时长的距离；
-- 句号、问号、感叹号、分号；
-- 字幕间停顿；
-- “但是、后来、因此、最终、与此同时”等转折/阶段词。
-
-输出包含 `boundaryReason`，供 Agent 再检查是否切断了完整事件或因果关系。
-
-兼容旧纯时长逻辑：
+复现旧行为：
 
 ```bash
 --mode duration
@@ -135,13 +119,11 @@ profiles/landscape-standard.json
 1920 × 1080
 ```
 
-如果源图比例和 profile 不一致，生产入口会警告；可用 `--strict-aspect` 直接阻止错误比例继续渲染。
+源图比例不匹配时会警告；`--strict-aspect` 可直接阻止继续渲染。
 
 ---
 
 # 4. CV 自动区域 / Polygon Proposal
-
-生成线稿后，可以先让 OpenCV 给出视觉候选：
 
 ```bash
 python scripts/suggest_regions.py scene.png \
@@ -150,28 +132,9 @@ python scripts/suggest_regions.py scene.png \
   --preview scene-regions-preview.png
 ```
 
-它会：
+它通过背景估计、笔迹检测、连通域和 convex hull 给出候选 `region + maskPolygon`。
 
-1. 从四角估计纸张背景；
-2. 找到与背景颜色差异明显或更深的笔迹；
-3. 合并邻近笔迹；
-4. 做 connected components；
-5. 输出候选 `region`；
-6. 为候选对象生成 convex-hull / simplified `maskPolygon`。
-
-常用参数：
-
-```text
---merge-gap
---min-area-ratio
---max-regions
---color-threshold
---dark-threshold
-```
-
-**重要：它只做视觉 proposal。**
-
-它不知道哪个对象对应哪句字幕，也不知道叙事顺序。正确生产流程是：
+**它只做视觉 proposal。** 正确流程仍是：
 
 ```text
 CV proposal
@@ -182,214 +145,268 @@ CV proposal
 → Preview 微调
 ```
 
-自动生成的 annotation 会明确写：
-
-```text
-narrativeRole = 待 Agent 结合字幕确认
-```
-
 ---
 
 # 5. Polygon Annotation
 
-矩形仍然保留：
-
 ```json
-"region": {"x": 120, "y": 200, "width": 500, "height": 700}
-```
-
-需要精细形状时增加：
-
-```json
-"maskPolygon": [
-  {"x": 160, "y": 230},
-  {"x": 560, "y": 220},
-  {"x": 610, "y": 760},
-  {"x": 180, "y": 820}
-]
-```
-
-重叠保护可以同时使用：
-
-```json
-"reveal": {
-  "protectedRegions": [],
-  "protectedPolygons": []
+{
+  "region": {"x": 120, "y": 200, "width": 500, "height": 700},
+  "maskPolygon": [
+    {"x": 160, "y": 230},
+    {"x": 560, "y": 220},
+    {"x": 610, "y": 760},
+    {"x": 180, "y": 820}
+  ],
+  "reveal": {
+    "protectedRegions": [],
+    "protectedPolygons": []
+  }
 }
 ```
 
-生产 renderer 的允许掩码现在是：
+真实允许掩码：
 
 ```text
-allowed mask
-= 当前 maskPolygon（没有则 region）
-- 所有后续元素 maskPolygon（没有则 region）
-- 当前 protectedRegions
-- 当前 protectedPolygons
+当前 maskPolygon（没有则 region）
+- 后续元素 maskPolygon（没有则 region）
+- protectedRegions
+- protectedPolygons
 ```
 
-因此完全不写 Polygon 的旧项目行为不变；有 Polygon 时才启用精细裁切。
+旧矩形 annotation 完全兼容。
 
 ---
 
-# 6. Preview V2
+# 6. Preview V2 + 真实低清预览
 
-打开：
+浏览器编辑：
 
 ```text
 assets/preview-v2.html
 ```
 
-建议用 Chrome / Edge，因为保存依赖 File System Access API。
+支持 sequence、duration、lead-in/gap/gaze、region、字幕、Polygon 顶点增删与拖动。
 
-支持：
-
-- 模块拖拽排序；
-- 自动重建 `sequence / startMs / sceneDurationMs`；
-- duration / lead-in / gap / gaze；
-- region 移动与精确尺寸；
-- label / subtitle / reveal direction；
-- `矩形 → Polygon`；
-- 拖动 Polygon 顶点；
-- 双击边附近增加顶点；
-- 右键顶点删除；
-- region 移动时 Polygon 同步移动；
-- region 缩放时 Polygon 同比例缩放；
-- 直接播放同目录 `<scene>-preview.mp4` 的真实 stream 预览。
-
-浏览器时间轴仍然是快速代理；真正判断笔迹质量，请继续使用下一步。
-
----
-
-# 7. 真实低清 Stream Preview
+真正判断笔迹质量：
 
 ```bash
 python scripts/render_preview.py \
-  scene.png \
-  scene.annotation.json \
-  scene-preview.mp4 \
+  scene.png scene.annotation.json scene-preview.mp4 \
   --profile vertical-short-video
+```
+
+默认 20 fps、长边 540px，调用的是同一套 production renderer。
+
+---
+
+# 7. 单幕最终成片
+
+仅白板动画：
+
+```bash
+python scripts/render_short_video.py \
+  scene.png scene.annotation.json scene.mp4 \
+  --profile vertical-short-video
+```
+
+旁白：
+
+```bash
+--narration narration.mp3
+```
+
+旁白 + BGM 自动 ducking：
+
+```bash
+--narration narration.mp3 \
+--bgm bgm.mp3 \
+--bgm-gain-db -18 \
+--duck-ratio 8
+```
+
+烧录字幕：
+
+```bash
+--subtitles narration.srt \
+--subtitle-font "Noto Sans CJK SC"
+```
+
+完整示例：
+
+```bash
+python scripts/render_short_video.py \
+  scene.png scene.annotation.json scene-final.mp4 \
+  --profile vertical-short-video \
+  --narration narration.mp3 \
+  --bgm bgm.mp3 \
+  --subtitles narration.srt \
+  --subtitle-font "Noto Sans CJK SC"
+```
+
+`--audio` 仍作为 `--narration` 的兼容别名。
+
+---
+
+# 8. Annotation 驱动 SFX
+
+场景级：
+
+```json
+{
+  "sfx": [
+    {"file": "sfx/scene-open.wav", "startMs": 300, "gainDb": -6}
+  ]
+}
+```
+
+元素级：
+
+```json
+{
+  "id": "impact",
+  "reveal": {"startMs": 2200, "durationMs": 1500},
+  "sfx": [
+    {"file": "sfx/hit.wav", "offsetMs": 120, "gainDb": -4}
+  ]
+}
+```
+
+元素 SFX 的全局时间锚点：
+
+```text
+scene global offset
++ normalized reveal.startMs
++ sfx.offsetMs
+```
+
+多幕项目会在每幕真实渲染完成后探测实际 MP4 时长，再累计下一幕的 global offset，减少跨幕编码时长误差。
+
+也可额外传入全局 SFX plan：
+
+```json
+{
+  "events": [
+    {"file": "sfx/whoosh.wav", "startMs": 5300, "gainDb": -8}
+  ]
+}
+```
+
+```bash
+--sfx-plan project.sfx.json
+```
+
+---
+
+# 9. BGM Ducking
+
+`audio_mix.py` 不是简单把 BGM 永久压低，而是：
+
+```text
+narration
+   ├─→ final mix
+   └─→ sidechain control
+             ↓
+looped BGM → sidechaincompress → ducked BGM
 ```
 
 默认：
 
 ```text
-20 fps
-长边 540 px
+BGM gain = -18 dB
+duck ratio = 8
+attack = 20 ms
+release = 300 ms
 ```
 
-它不是另一套模拟算法，而是调用**同一个 production renderer**，只降低分辨率和 FPS，因此非常适合检查：
-
-- 实际绘制顺序；
-- Polygon 是否切掉关键笔迹；
-- future element 是否提前泄露；
-- grid / skeleton 哪个更自然；
-- 手部与笔迹的贴合程度。
-
-生成 `<scene>-preview.mp4` 后，Preview V2 可以直接播放。
+旁白停止后，BGM 会按 release 恢复，不需要手工做音量关键帧。
 
 ---
 
-# 8. Annotation / Polygon 校验
+# 10. 字幕烧录
 
-基础 annotation 工具：
-
-```bash
-python scripts/annotation_tools.py scene.annotation.json --normalize
-```
-
-生产入口还会额外调用 Polygon validator，检查：
-
-- canvas 是否有效；
-- region 是否越界；
-- duration 是否非法；
-- sequence 是否连续；
-- 时间轴是否重叠；
-- `maskPolygon` 是否至少 3 个点；
-- Polygon 顶点是否在 canvas 范围内；
-- `protectedPolygons` 是否为正确数组结构；
-- `sceneDurationMs` 是否覆盖最终绘制时间。
-
----
-
-# 9. 单幕渲染
-
-```bash
-python scripts/render_short_video.py \
-  scene.png \
-  scene.annotation.json \
-  scene.mp4 \
-  --profile vertical-short-video
-```
-
-默认使用 `PolygonRegionStreamRenderer`：
-
-- 有 Polygon → Polygon mask；
-- 没 Polygon → 原矩形 region；
-- 底层 ink/grid/skeleton/contour-wipe 算法继续复用上游。
-
-常用覆盖：
+字幕链路：
 
 ```text
---ink-path grid|skeleton
---color-fill contour-wipe|brush
---fps
---cap-long-edge
---canvas-hex
---target-hand-height
+SRT
+→ subtitle_ass.py
+→ ASS style
+→ burn_subtitles.py / libass
+→ H.264 MP4
 ```
 
-带旁白：
+ASS 尺寸会依据实际视频分辨率生成。可以调整字体、字号和底部安全边距。
 
-```bash
-python scripts/render_short_video.py ... --audio narration.mp3
-```
+要求 ffmpeg 含 `ass` filter；如果没有，会明确报错而不是输出“看起来成功但没有字幕”的视频。
 
 ---
 
-# 10. 多幕批量生产
+# 11. 最终音视频装配与时长校准
 
-目录：
-
-```text
-scene-01.png
-scene-01.annotation.json
-scene-02.png
-scene-02.annotation.json
-scene-03.png
-scene-03.annotation.json
-```
-
-批量：
+独立入口：
 
 ```bash
-python scripts/render_project.py ./scenes ./final.mp4 \
-  --profile vertical-short-video
+python scripts/assemble_media.py visual.mp4 final.mp4 \
+  --narration narration.mp3 \
+  --bgm bgm.mp3 \
+  --sfx-plan project.sfx.json \
+  --subtitles narration.srt
 ```
 
-带整条旁白：
+装配顺序：
+
+```text
+probe visual duration
+→ narration/BGM/SFX mix
+→ apad + atrim 到视频长度
+→ mux
+→ subtitle burn-in
+→ probe final duration
+→ drift validation
+```
+
+默认允许最大时长漂移：
+
+```text
+250 ms
+```
+
+超过阈值直接报错。可用 `--max-drift-ms` 调整。
+
+---
+
+# 12. 多幕批量生产
 
 ```bash
 python scripts/render_project.py ./scenes ./final.mp4 \
   --profile vertical-short-video \
-  --audio narration-full.mp3
+  --narration narration-full.mp3 \
+  --bgm bgm.mp3 \
+  --subtitles narration-full.srt
 ```
 
-只看计划、不渲染：
+`render_project.py` 会：
+
+1. 自然排序 scene；
+2. 校验 image/annotation 配对；
+3. 逐幕调用 production renderer；
+4. 探测每幕真实输出时长；
+5. 汇总 annotation SFX 到全局时间轴；
+6. 合并视觉；
+7. 调用 `assemble_media.py` 混音、字幕和时长校准；
+8. 写 manifest。
+
+只看计划：
 
 ```bash
 --dry-run
 ```
 
-批处理会自然排序、检查 image/annotation 配对、逐幕渲染、合并视觉、最终 mux 整条音轨并写出 manifest。
-
 ---
 
-# 11. 为什么不直接重写 stream_render.py
+# 13. 工程边界
 
-这是本 fork 最重要的工程决策之一。
-
-`stream_render.py` 仍是上游的核心笔迹算法，当前升级尽可能通过外围模块完成：
+本 fork 仍尽量不修改 `stream_render.py`。新增能力主要位于：
 
 ```text
 parse_srt.py
@@ -401,32 +418,37 @@ preview-v2.html
 render_preview.py
 render_short_video.py
 render_project.py
-mux_audio.py
-profiles/
+media_utils.py
+audio_mix.py
+sfx_plan.py
+subtitle_ass.py
+burn_subtitles.py
+assemble_media.py
 ```
 
-好处是：上游以后继续优化 skeleton、grid、hand path、contour wipe 时，这个 fork 仍然比较容易同步，而不是一次改造后彻底失去 upstream compatibility。
+这样上游继续优化 skeleton、grid、hand path、contour wipe 时，仍更容易同步。
 
 ---
 
-# 12. 测试与 CI
+# 14. 测试与 CI
 
-GitHub Actions 会：
+GitHub Actions 会安装真实 ffmpeg，并验证：
 
-1. 安装 `numpy + opencv-python-headless`；
-2. `py_compile` 所有升级脚本；
-3. 运行完整 unittest。
+- `sidechaincompress` filter；
+- `ass` / libass filter；
+- 所有升级脚本 `py_compile`；
+- 完整 unittest。
 
-当前测试覆盖：
+运行时测试覆盖：
 
-- sequence timeline normalize；
-- annotation 边界校验；
+- sequence/timeline；
 - semantic SRT grouping；
-- 多幕场景发现 / 自然排序；
-- Polygon schema；
-- Polygon mask 的真实数组裁切；
-- protectedPolygon subtraction；
-- CV proposal 对多个独立对象的识别。
+- Polygon schema/raster mask；
+- CV proposal；
+- annotation SFX offset；
+- BGM ducking + SFX 混音；
+- ASS 字幕烧录；
+- 最终 media assembly 的音轨存在性和 duration drift。
 
 ---
 
@@ -442,23 +464,21 @@ python scripts/prepare_env.py
 pip install -r requirements.txt
 ```
 
+字幕烧录建议安装带 libass 的系统 ffmpeg。`imageio-ffmpeg` 可作为一般 ffmpeg fallback，但不保证包含 libass。
+
 跨平台中文预览字体可覆盖：
 
 ```text
 SRT_WHITEBOARD_FONT=/path/to/font.ttf
 ```
 
----
+## 当前边界
 
-# 当前边界
-
-这版已经支持 Polygon，但仍有几个明确边界：
-
-- `maskPolygon` 在 Preview V2 中可视化编辑；`protectedPolygons` 主要由 Agent / JSON 写入，尚未做完整可视化编辑器；
-- CV proposal 是启发式连通域，不是通用实例分割模型，复杂重叠图仍可能过度合并或拆分；
-- 浏览器代理不是逐笔 renderer，本地 `render_preview.py` 才是最终笔迹 QC；
-- 还没有内置字幕烧录、BGM ducking、SFX 事件轨；
-- 图像生成、TTS、发布平台上传仍应由更大的 Video Agent / 其它 Skill 负责。
+- CV proposal 仍是确定性连通域启发式，不是通用实例分割模型；
+- `protectedPolygons` 主要由 Agent/JSON 写入，Preview V2 重点编辑当前元素 `maskPolygon`；
+- semantic scene planning 仍需要 Agent 做完整叙事复核；
+- BGM/SFX 素材选择本身不由 renderer 自动生成；
+- 图像生成、TTS、发布平台上传应由更大的 Video Agent 或其它 Skill 负责。
 
 ## License
 
