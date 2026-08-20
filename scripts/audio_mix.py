@@ -8,7 +8,7 @@ import subprocess
 from pathlib import Path
 
 from media_utils import db_to_linear, find_ffmpeg, ffmpeg_has_filter
-from sfx_plan import validate_sfx_events
+from sfx_plan import normalize_sfx_events, validate_sfx_events
 
 
 def _raise_invalid_sfx(events: list[dict], *, scope: str) -> None:
@@ -29,7 +29,7 @@ def load_sfx_plan(path: str | Path | None) -> list[dict]:
         raise ValueError("SFX plan 必须是数组或 {events:[...]} JSON")
     _raise_invalid_sfx(events, scope="SFX plan")
     out = []
-    for raw in events:
+    for raw in normalize_sfx_events(events):
         event = dict(raw)
         p = Path(event["file"])
         event["file"] = str(p if p.is_absolute() else (plan_path.parent / p).resolve())
@@ -45,8 +45,10 @@ def mix_audio(output: str | Path, *, duration: float, narration: str | Path | No
     if duration <= 0:
         raise ValueError("duration 必须大于 0")
     output = Path(output); output.parent.mkdir(parents=True, exist_ok=True)
-    ffmpeg = find_ffmpeg(); sfx_events = sfx_events or []
-    _raise_invalid_sfx(sfx_events, scope="runtime SFX")
+    ffmpeg = find_ffmpeg()
+    raw_sfx = sfx_events or []
+    _raise_invalid_sfx(raw_sfx, scope="runtime SFX")
+    sfx_events = normalize_sfx_events(raw_sfx)
     for label, value in (("narration", narration), ("bgm", bgm)):
         if value and not Path(value).is_file():
             raise FileNotFoundError(f"{label} 文件不存在: {value}")
