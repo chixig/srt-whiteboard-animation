@@ -9,7 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from assemble_media import assemble_media
-from audio_mix import mix_audio
+from audio_mix import load_sfx_plan, mix_audio
 from burn_subtitles import burn_subtitles
 from media_utils import ffmpeg_has_filter, probe_media
 from sfx_plan import collect_scene_sfx, validate_sfx_fields
@@ -44,6 +44,13 @@ class Phase4PureTests(unittest.TestCase):
         self.assertIn("sfx.file_required", codes)
         self.assertIn("sfx.invalid_time", codes)
         self.assertIn("sfx.invalid_gain", codes)
+
+    def test_invalid_external_sfx_plan_is_rejected(self):
+        with tempfile.TemporaryDirectory() as td:
+            plan = Path(td) / "bad.json"
+            plan.write_text(json.dumps({"events": [{"file": "hit.wav", "startMs": "later"}]}), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                load_sfx_plan(plan)
 
 
 @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "ffmpeg/ffprobe required")
