@@ -130,7 +130,11 @@ def main(argv=None) -> int:
         if args.bare_tip: cmd.append("--bare-tip")
         if args.strict_aspect: cmd.append("--strict-aspect")
         print(f"[scene {index}/{len(scenes)}] {scene['stem']}")
-        normalized = _normalized_annotation(scene["annotation"], args, profile)
+        try:
+            normalized = _normalized_annotation(scene["annotation"], args, profile)
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            print(f"[err] 场景 {scene['stem']} annotation 读取/归一化失败: {exc}")
+            return 1
 
         if not args.no_annotation_sfx:
             sfx_findings = validate_sfx_fields(normalized)
@@ -158,8 +162,12 @@ def main(argv=None) -> int:
                            "durationMs": actual_ms, "output": str(scene_out)})
         scene_offset_ms += actual_ms
 
-    external_sfx = load_sfx_plan(args.sfx_plan) if args.sfx_plan else []
-    all_sfx = sorted(project_sfx + external_sfx, key=lambda e: (int(e.get("startMs", 0)), str(e.get("file", ""))))
+    try:
+        external_sfx = load_sfx_plan(args.sfx_plan) if args.sfx_plan else []
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        print(f"[err] 外部 SFX plan 无效: {exc}")
+        return 1
+    all_sfx = sorted(project_sfx + external_sfx, key=lambda e: (int(round(float(e.get("startMs", 0)))), str(e.get("file", ""))))
     missing_sfx = [str(e.get("file")) for e in all_sfx if e.get("file") and not Path(e["file"]).is_file()]
     if missing_sfx:
         print("[err] SFX 文件不存在: " + ", ".join(missing_sfx)); return 1
