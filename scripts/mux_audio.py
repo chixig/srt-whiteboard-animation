@@ -1,26 +1,12 @@
 #!/usr/bin/env python3
-"""Mux narration/audio into an MP4 using system ffmpeg or imageio-ffmpeg."""
+"""Mux one prepared audio track into an MP4."""
 from __future__ import annotations
 
 import argparse
-import shutil
 import subprocess
 from pathlib import Path
 
-
-def find_ffmpeg() -> str:
-    system = shutil.which("ffmpeg")
-    if system:
-        return system
-    try:
-        import imageio_ffmpeg
-
-        return imageio_ffmpeg.get_ffmpeg_exe()
-    except Exception as exc:  # pragma: no cover - environment specific
-        raise RuntimeError(
-            "找不到 ffmpeg。请运行 scripts/prepare_env.py 安装 imageio-ffmpeg，"
-            "或在系统中安装 ffmpeg。"
-        ) from exc
+from media_utils import find_ffmpeg
 
 
 def mux_audio(video: str | Path, audio: str | Path, output: str | Path, *, fit: str = "video") -> Path:
@@ -55,7 +41,7 @@ def mux_audio(video: str | Path, audio: str | Path, output: str | Path, *, fit: 
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="给白板 MP4 合成旁白/原声")
+    parser = argparse.ArgumentParser(description="给白板 MP4 合成单条已准备音轨")
     parser.add_argument("video")
     parser.add_argument("audio")
     parser.add_argument("output")
