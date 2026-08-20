@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 """Production wrapper for SRT whiteboard animation.
 
-Adds deterministic sequence-based timing, annotation validation, reusable profiles,
-9:16/16:9 production presets, polygon-aware masks and optional audio muxing without
-rewriting the underlying stream renderer.
+Sequence-driven timing + validation + profiles + Polygon masks + final media assembly.
 """
 from __future__ import annotations
 
@@ -20,8 +18,10 @@ import annotation_tools as at  # noqa: E402
 import polygon_schema as ps  # noqa: E402
 import render_stream_whiteboard as rsw  # noqa: E402
 import stream_render as sr  # noqa: E402
+from assemble_media import assemble_media  # noqa: E402
 from mux_audio import mux_audio  # noqa: E402
 from polygon_renderer import PolygonRegionStreamRenderer  # noqa: E402
+from sfx_plan import collect_scene_sfx  # noqa: E402
 
 PROFILE_DIR = _ROOT / "profiles"
 PROFILE_KEYS = {
@@ -63,12 +63,10 @@ def _profile_cfg(profile: dict, args: argparse.Namespace) -> sr.Config:
 
 def _aspect_warning(profile: dict, width: int, height: int, strict: bool) -> None:
     canvas = profile.get("canvas") or {}
-    pw = int(canvas.get("width") or 0)
-    ph = int(canvas.get("height") or 0)
+    pw = int(canvas.get("width") or 0); ph = int(canvas.get("height") or 0)
     if not pw or not ph:
         return
-    expected = pw / ph
-    actual = width / height
+    expected = pw / ph; actual = width / height
     delta = abs(actual - expected) / expected
     if delta <= 0.02:
         return
@@ -79,17 +77,27 @@ def _aspect_warning(profile: dict, width: int, height: int, strict: bool) -> Non
 
 
 def _parse_args(argv=None):
-    p = argparse.ArgumentParser(description="白板动画生产包装器：时序归一化 + profile + Polygon + 音频")
+    p = argparse.ArgumentParser(description="白板动画生产包装器：时序 + Polygon + 最终音视频装配")
     p.add_argument("image", help="线稿图")
     p.add_argument("annotation", help="annotation.json")
     p.add_argument("output", help="最终 MP4")
-    p.add_argument("--profile", default="vertical-short-video",
-                   help="profiles/*.json 名称或自定义 JSON 路径")
-    p.add_argument("--audio", help="旁白/原声文件；提供后自动 mux")
-    p.add_argument("--audio-fit", choices=["video", "shortest"], default="video")
-    p.add_argument("--timeline-mode", choices=["sequence", "startMs"], default="sequence",
-                   help="默认 sequence 为唯一绘制顺序真相")
-    p.add_argument("--no-retime", action="store_true", help="不重排 startMs，仅做校验")
+    p.add_argument("--profile", default="vertical-short-video")
+    p.add_argument("--audio", "--narration", dest="narration", help="旁白/原声；--audio 保留兼容")
+    p.add_argument("--audio-fit", choices=["video", "shortest"], default="video",
+                   help="兼容旧版；shortest 仅在只有旁白时走旧 mux")
+    p.add_argument("--bgm", help="背景音乐；自动循环并在旁白出现时 ducking")
+    p.add_argument("--sfx-plan", help="额外 SFX plan JSON")
+    p.add_argument("--no-annotation-sfx", action="store_true", help="忽略 annotation 中的 sfx 事件")
+    p.add_argument("--subtitles", help="要烧录的 SRT 字幕")
+    p.add_argument("--subtitle-font", default="Arial")
+    p.add_argument("--subtitle-font-size", type=int)
+    p.add_argument("--subtitle-margin-v", type=int)
+    p.add_argument("--narration-gain-db", type=float, default=0.0)
+    p.add_argument("--bgm-gain-db", type=float, default=-18.0)
+    p.add_argument("--duck-ratio", type=float, default=8.0)
+    p.add_argument("--max-drift-ms", type=int, default=250)
+    p.add_argument("--timeline-mode", choices=["sequence", "startMs"], default="sequence")
+    p.add_argument("--no-retime", action="store_true")
     p.add_argument("--gap-ms", type=int, default=None)
     p.add_argument("--lead-in-ms", type=int, default=None)
     p.add_argument("--gaze-ms", type=int, default=None)
@@ -112,26 +120,23 @@ def main(argv=None) -> int:
     try:
         profile = load_profile(args.profile)
     except (OSError, json.JSONDecodeError) as exc:
-        print(f"[err] {exc}")
-        return 1
+        print(f"[err] {exc}"); return 1
     cfg = _profile_cfg(profile, args)
 
     image = sr._imread_any(args.image)
     if image is None:
-        print(f"[err] 无法读取图片: {args.image}")
-        return 1
+        print(f"[err] 无法读取图片: {args.image}"); return 1
     h, w = image.shape[:2]
     try:
         _aspect_warning(profile, w, h, args.strict_aspect)
     except ValueError as exc:
-        print(f"[err] {exc}")
-        return 1
+        print(f"[err] {exc}"); return 1
 
+    ann_path = Path(args.annotation)
     try:
-        annotation = json.loads(Path(args.annotation).read_text(encoding="utf-8"))
+        annotation = json.loads(ann_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        print(f"[err] 无法读取 annotation: {exc}")
-        return 1
+        print(f"[err] 无法读取 annotation: {exc}"); return 1
 
     timeline = profile.get("timeline") or {}
     if not args.no_retime:
@@ -152,14 +157,21 @@ def main(argv=None) -> int:
     if any(f["severity"] == "error" for f in findings):
         return 1
 
+    annotation_sfx = [] if args.no_annotation_sfx else collect_scene_sfx(annotation, ann_path)
+    missing_sfx = [e["file"] for e in annotation_sfx if not Path(e["file"]).is_file()]
+    if missing_sfx:
+        print("[err] annotation SFX 文件不存在: " + ", ".join(missing_sfx)); return 1
+
     total_ms = args.total_ms or int(annotation.get("sceneDurationMs") or 0)
     if not total_ms:
         total_ms = max(e["reveal"]["startMs"] + e["reveal"]["durationMs"] for e in annotation["elements"]) + 500
 
-    out = Path(args.output)
-    out.parent.mkdir(parents=True, exist_ok=True)
+    out = Path(args.output); out.parent.mkdir(parents=True, exist_ok=True)
     raw = out.with_name(out.stem + "_raw.mp4")
-    video_only = out if not args.audio else out.with_name(out.stem + "_video.mp4")
+    phase4_features = bool(args.bgm or args.sfx_plan or args.subtitles or annotation_sfx)
+    legacy_shortest = bool(args.narration and args.audio_fit == "shortest" and not phase4_features)
+    needs_assembly = bool(args.narration or phase4_features) and not legacy_shortest
+    video_only = out if not (needs_assembly or legacy_shortest) else out.with_name(out.stem + "_video.mp4")
 
     hand_png = Path(args.hand) if args.hand else None
     renderer = PolygonRegionStreamRenderer(image, annotation, cfg, hand_png, args.bare_tip)
@@ -171,13 +183,33 @@ def main(argv=None) -> int:
     renderer.render_to(raw, total_ms)
     final_video = sr.transcode_h264(raw, video_only)
     final = final_video
-    if args.audio:
-        final = mux_audio(final_video, args.audio, out, fit=args.audio_fit)
+
+    if legacy_shortest:
+        final = mux_audio(final_video, args.narration, out, fit="shortest")
+    elif needs_assembly:
+        try:
+            final = assemble_media(
+                final_video, out,
+                narration=args.narration,
+                bgm=args.bgm,
+                sfx_plan=args.sfx_plan,
+                sfx_events=annotation_sfx,
+                subtitles=args.subtitles,
+                subtitle_font=args.subtitle_font,
+                subtitle_font_size=args.subtitle_font_size,
+                subtitle_margin_v=args.subtitle_margin_v,
+                narration_gain_db=args.narration_gain_db,
+                bgm_gain_db=args.bgm_gain_db,
+                duck_ratio=args.duck_ratio,
+                max_drift_ms=args.max_drift_ms,
+            )
+        except (RuntimeError, ValueError, OSError) as exc:
+            print(f"[err] 最终音视频装配失败: {exc}"); return 1
 
     if not args.keep_intermediate:
         if raw.exists() and raw != final:
             raw.unlink(missing_ok=True)
-        if args.audio and video_only.exists() and video_only != final:
+        if video_only.exists() and video_only != final:
             video_only.unlink(missing_ok=True)
 
     print(f"OUTPUT={final}")
