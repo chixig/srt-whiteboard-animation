@@ -96,6 +96,8 @@ def _parse_args(argv=None):
     p.add_argument("--bgm-gain-db", type=float, default=-18.0)
     p.add_argument("--duck-ratio", type=float, default=8.0)
     p.add_argument("--max-drift-ms", type=int, default=250)
+    p.add_argument("--max-source-mismatch-ms", type=int, default=1500,
+                   help="旁白/字幕与画面允许的源时长差；负数禁用源素材时长保护")
     p.add_argument("--timeline-mode", choices=["sequence", "startMs"], default="sequence")
     p.add_argument("--no-retime", action="store_true")
     p.add_argument("--gap-ms", type=int, default=None)
@@ -204,6 +206,7 @@ def main(argv=None) -> int:
                 bgm_gain_db=args.bgm_gain_db,
                 duck_ratio=args.duck_ratio,
                 max_drift_ms=args.max_drift_ms,
+                max_source_mismatch_ms=args.max_source_mismatch_ms,
             )
         except (RuntimeError, ValueError, OSError) as exc:
             print(f"[err] 最终音视频装配失败: {exc}"); return 1
