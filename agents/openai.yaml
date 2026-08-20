@@ -1,4 +1,4 @@
 interface:
   display_name: "SRT 白板动画"
-  short_description: "把 SRT/旁白制作成支持语义分幕、Polygon 遮罩、真实预览、横竖版、批量渲染和音轨的流式笔迹白板动画"
-  default_prompt: "使用 $srt-whiteboard-animation 根据这份 SRT、旁白或脚本生成白板手绘动画：默认先做 semantic scene planning，再按目标平台选择 profile；生成图片后可用 suggest_regions.py 产出 CV 区域/Polygon proposal，但必须结合字幕做语义复核；annotation 以 sequence 为唯一绘制顺序，优先用 Preview V2 调整 region/Polygon 和时序，并用 render_preview.py 生成真实低清 stream 预览；单幕走 render_short_video.py，多幕走 render_project.py；若提供整条音频则在最终合并后 mux。"
+  short_description: "把 SRT/旁白制作成支持语义分幕、Polygon、真实预览、批量渲染、BGM ducking、SFX 和字幕烧录的白板视频"
+  default_prompt: "使用 $srt-whiteboard-animation 根据这份 SRT、旁白或脚本生成最终白板视频：先做 semantic scene planning，再按平台选择 profile；图片生成后可用 suggest_regions.py 给出 CV region/Polygon proposal，但必须结合字幕做语义复核；annotation 以 sequence 为唯一绘制顺序，优先用 Preview V2 调整并用 render_preview.py 做真实低清 stream QC；单幕走 render_short_video.py，多幕走 render_project.py；若提供旁白、BGM、SFX 或 SRT，则通过 assemble_media.py 完成 sidechain ducking、定时 SFX、字幕烧录和最终 duration drift 校验。"
