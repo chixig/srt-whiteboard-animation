@@ -52,6 +52,14 @@ class Phase4PureTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 load_sfx_plan(plan)
 
+    def test_external_sfx_string_shorthand_is_normalized(self):
+        with tempfile.TemporaryDirectory() as td:
+            plan = Path(td) / "short.json"
+            plan.write_text(json.dumps({"events": ["hit.wav"]}), encoding="utf-8")
+            events = load_sfx_plan(plan)
+            self.assertEqual(len(events), 1)
+            self.assertTrue(events[0]["file"].endswith("hit.wav"))
+
 
 @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "ffmpeg/ffprobe required")
 class Phase4RuntimeTests(unittest.TestCase):
@@ -98,6 +106,11 @@ class Phase4RuntimeTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             assemble_media(self.d / "video.mp4", self.d / "bad-sub.mp4",
                            subtitles=srt, max_source_mismatch_ms=100)
+
+    def test_sfx_start_after_video_is_rejected(self):
+        with self.assertRaises(RuntimeError):
+            assemble_media(self.d / "video.mp4", self.d / "bad-sfx.mp4",
+                           sfx_events=[{"file": str(self.d / "sfx.wav"), "startMs": 2000}])
 
     def test_full_assembly_has_audio_and_keeps_duration(self):
         if not ffmpeg_has_filter("ass"):
