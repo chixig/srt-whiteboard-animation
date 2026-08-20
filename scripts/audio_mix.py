@@ -7,7 +7,7 @@ import json
 import subprocess
 from pathlib import Path
 
-from media_utils import db_to_linear, find_ffmpeg
+from media_utils import db_to_linear, find_ffmpeg, ffmpeg_has_filter
 
 
 def load_sfx_plan(path: str | Path | None) -> list[dict]:
@@ -40,6 +40,8 @@ def mix_audio(output: str | Path, *, duration: float, narration: str | Path | No
         raise ValueError("duration 必须大于 0")
     output = Path(output); output.parent.mkdir(parents=True, exist_ok=True)
     ffmpeg = find_ffmpeg(); sfx_events = sfx_events or []
+    if narration and bgm and not ffmpeg_has_filter("sidechaincompress", ffmpeg):
+        raise RuntimeError("当前 ffmpeg 不支持 sidechaincompress，无法执行 BGM ducking；请安装完整系统 ffmpeg")
 
     cmd = [ffmpeg, "-y"]
     inputs: list[tuple[str, dict]] = []
