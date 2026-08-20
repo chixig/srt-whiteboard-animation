@@ -18,7 +18,7 @@ _IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp")
 import annotation_tools as at  # noqa: E402
 from audio_mix import load_sfx_plan  # noqa: E402
 from media_utils import probe_media  # noqa: E402
-from sfx_plan import collect_scene_sfx, write_plan  # noqa: E402
+from sfx_plan import collect_scene_sfx, validate_sfx_fields, write_plan  # noqa: E402
 
 
 def _natural_key(path: Path) -> list[object]:
@@ -132,6 +132,16 @@ def main(argv=None) -> int:
         print(f"[scene {index}/{len(scenes)}] {scene['stem']}")
         normalized = _normalized_annotation(scene["annotation"], args, profile)
 
+        if not args.no_annotation_sfx:
+            sfx_findings = validate_sfx_fields(normalized)
+            for finding in sfx_findings:
+                prefix = "ERR" if finding["severity"] == "error" else "WARN"
+                element = f" [{finding['element']}]" if finding.get("element") else ""
+                print(f"[{prefix}] {finding['code']}{element}: {finding['message']}")
+            if any(f["severity"] == "error" for f in sfx_findings):
+                print(f"[err] 场景 {scene['stem']} 的 annotation SFX 配置无效")
+                return 1
+
         if not args.dry_run:
             try:
                 _run(cmd)
@@ -189,6 +199,7 @@ def main(argv=None) -> int:
             print("$ " + " ".join(assembly_cmd))
     else:
         if not args.dry_run:
+            out.unlink(missing_ok=True)
             shutil.move(str(merged_visual), str(out))
 
     manifest = {
