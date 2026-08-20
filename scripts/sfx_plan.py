@@ -22,6 +22,11 @@ def _entries(value: Any) -> list[dict]:
     return []
 
 
+def normalize_sfx_events(value: Any) -> list[dict]:
+    """Expand string/dict/list shorthand into a flat list of event dictionaries."""
+    return [dict(event) for event in _entries(value)]
+
+
 def _number(value: Any) -> float | None:
     try:
         return float(value)
@@ -36,6 +41,11 @@ def _validate_value(value: Any, *, scope: str, element: str | None = None) -> li
         return [{"severity": "error", "code": "sfx.invalid_container", "element": element,
                  "message": f"{scope} sfx 必须是文件字符串、对象或数组"}]
     findings: list[dict] = []
+    if isinstance(value, list):
+        for index, item in enumerate(value):
+            if not isinstance(item, (str, dict, list)):
+                findings.append({"severity": "error", "code": "sfx.invalid_entry", "element": element,
+                                 "message": f"{scope} sfx[{index}] 必须是文件字符串、对象或数组"})
     entries = _entries(value)
     if not entries and value not in (None, [], ""):
         findings.append({"severity": "error", "code": "sfx.invalid_entry", "element": element,
@@ -58,7 +68,6 @@ def _validate_value(value: Any, *, scope: str, element: str | None = None) -> li
 
 
 def validate_sfx_events(events: Any, *, scope: str = "SFX plan") -> list[dict]:
-    """Validate already-expanded or external SFX event containers."""
     return _validate_value(events, scope=scope)
 
 
