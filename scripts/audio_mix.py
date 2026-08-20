@@ -8,6 +8,15 @@ import subprocess
 from pathlib import Path
 
 from media_utils import db_to_linear, find_ffmpeg, ffmpeg_has_filter
+from sfx_plan import validate_sfx_events
+
+
+def _raise_invalid_sfx(events: list[dict], *, scope: str) -> None:
+    findings = validate_sfx_events(events, scope=scope)
+    errors = [f for f in findings if f["severity"] == "error"]
+    if errors:
+        details = "; ".join(f"{f['code']}: {f['message']}" for f in errors)
+        raise ValueError(details)
 
 
 def load_sfx_plan(path: str | Path | None) -> list[dict]:
@@ -18,15 +27,12 @@ def load_sfx_plan(path: str | Path | None) -> list[dict]:
     events = data.get("events") if isinstance(data, dict) else data
     if not isinstance(events, list):
         raise ValueError("SFX plan 必须是数组或 {events:[...]} JSON")
+    _raise_invalid_sfx(events, scope="SFX plan")
     out = []
     for raw in events:
-        if not isinstance(raw, dict):
-            continue
         event = dict(raw)
-        file = event.get("file")
-        if file:
-            p = Path(file)
-            event["file"] = str(p if p.is_absolute() else (plan_path.parent / p).resolve())
+        p = Path(event["file"])
+        event["file"] = str(p if p.is_absolute() else (plan_path.parent / p).resolve())
         out.append(event)
     return out
 
@@ -40,6 +46,7 @@ def mix_audio(output: str | Path, *, duration: float, narration: str | Path | No
         raise ValueError("duration 必须大于 0")
     output = Path(output); output.parent.mkdir(parents=True, exist_ok=True)
     ffmpeg = find_ffmpeg(); sfx_events = sfx_events or []
+    _raise_invalid_sfx(sfx_events, scope="runtime SFX")
     if narration and bgm and not ffmpeg_has_filter("sidechaincompress", ffmpeg):
         raise RuntimeError("当前 ffmpeg 不支持 sidechaincompress，无法执行 BGM ducking；请安装完整系统 ffmpeg")
 
@@ -50,10 +57,7 @@ def mix_audio(output: str | Path, *, duration: float, narration: str | Path | No
     if bgm:
         cmd += ["-stream_loop", "-1", "-i", str(bgm)]; inputs.append(("bgm", {}))
     for event in sfx_events:
-        file = event.get("file")
-        if not file:
-            continue
-        cmd += ["-i", str(file)]; inputs.append(("sfx", event))
+        cmd += ["-i", str(event["file"])]; inputs.append(("sfx", event))
 
     if not inputs:
         cmd += ["-f", "lavfi", "-i", f"anullsrc=r=48000:cl=stereo:d={duration:.6f}"]
@@ -113,10 +117,14 @@ def main(argv=None) -> int:
     p.add_argument("--bgm-gain-db", type=float, default=-18.0)
     p.add_argument("--duck-ratio", type=float, default=8.0)
     args = p.parse_args(argv)
-    events = load_sfx_plan(args.sfx_plan)
-    out = mix_audio(args.output, duration=args.duration, narration=args.narration, bgm=args.bgm,
-                    sfx_events=events, narration_gain_db=args.narration_gain_db,
-                    bgm_gain_db=args.bgm_gain_db, duck_ratio=args.duck_ratio)
+    try:
+        events = load_sfx_plan(args.sfx_plan)
+        out = mix_audio(args.output, duration=args.duration, narration=args.narration, bgm=args.bgm,
+                        sfx_events=events, narration_gain_db=args.narration_gain_db,
+                        bgm_gain_db=args.bgm_gain_db, duck_ratio=args.duck_ratio)
+    except (OSError, ValueError, RuntimeError, json.JSONDecodeError) as exc:
+        print(f"[err] {exc}")
+        return 1
     print(f"OUTPUT={out}")
     return 0
 
