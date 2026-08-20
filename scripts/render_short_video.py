@@ -21,7 +21,7 @@ import stream_render as sr  # noqa: E402
 from assemble_media import assemble_media  # noqa: E402
 from mux_audio import mux_audio  # noqa: E402
 from polygon_renderer import PolygonRegionStreamRenderer  # noqa: E402
-from sfx_plan import collect_scene_sfx  # noqa: E402
+from sfx_plan import collect_scene_sfx, validate_sfx_fields  # noqa: E402
 
 PROFILE_DIR = _ROOT / "profiles"
 PROFILE_KEYS = {
@@ -150,6 +150,8 @@ def main(argv=None) -> int:
 
     findings = at.validate_annotation(annotation, image_size=(w, h))
     findings.extend(ps.validate_polygon_fields(annotation))
+    if not args.no_annotation_sfx:
+        findings.extend(validate_sfx_fields(annotation))
     for finding in findings:
         prefix = "ERR" if finding["severity"] == "error" else "WARN"
         element = f" [{finding['element']}]" if finding.get("element") else ""
