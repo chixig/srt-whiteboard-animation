@@ -57,6 +57,11 @@ def _validate_value(value: Any, *, scope: str, element: str | None = None) -> li
     return findings
 
 
+def validate_sfx_events(events: Any, *, scope: str = "SFX plan") -> list[dict]:
+    """Validate already-expanded or external SFX event containers."""
+    return _validate_value(events, scope=scope)
+
+
 def validate_sfx_fields(annotation: dict) -> list[dict]:
     findings = _validate_value(annotation.get("sfx"), scope="scene")
     for index, element in enumerate(annotation.get("elements") or []):
