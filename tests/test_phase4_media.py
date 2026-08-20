@@ -1,3 +1,4 @@
+import json
 import shutil
 import subprocess
 import sys
@@ -7,6 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
+from assemble_media import assemble_media
 from audio_mix import mix_audio
 from burn_subtitles import burn_subtitles
 from media_utils import ffmpeg_has_filter, probe_media
@@ -67,6 +69,22 @@ class Phase4RuntimeTests(unittest.TestCase):
         out = self.d / "sub.mp4"
         burn_subtitles(self.d / "video.mp4", srt, out, font="Arial")
         self.assertAlmostEqual(probe_media(out)["duration"], 1.6, delta=0.08)
+
+    def test_full_assembly_has_audio_and_keeps_duration(self):
+        if not ffmpeg_has_filter("ass"):
+            self.skipTest("ffmpeg has no ass/libass filter")
+        srt = self.d / "cap.srt"
+        srt.write_text("1\n00:00:00,200 --> 00:00:01,000\nHello\n", encoding="utf-8")
+        plan = self.d / "sfx.json"
+        plan.write_text(json.dumps({"events": [{"file": "sfx.wav", "startMs": 650, "gainDb": -6}]}), encoding="utf-8")
+        out = self.d / "final.mp4"
+        assemble_media(self.d / "video.mp4", out, narration=self.d / "narr.wav",
+                       bgm=self.d / "bgm.wav", sfx_plan=plan, subtitles=srt,
+                       subtitle_font="Arial", max_drift_ms=100)
+        info = probe_media(out)
+        self.assertTrue(info["hasAudio"])
+        self.assertTrue(info["hasVideo"])
+        self.assertAlmostEqual(info["duration"], 1.6, delta=0.08)
 
 
 if __name__ == "__main__":
