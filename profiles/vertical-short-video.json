@@ -1,0 +1,19 @@
+{
+  "name": "vertical-short-video",
+  "description": "9:16 Full HD vertical whiteboard preset for short-video platforms",
+  "aspect_ratio": "9:16",
+  "canvas": {"width": 1080, "height": 1920},
+  "renderer": {
+    "fps": 30,
+    "cap_long_edge": 1920,
+    "grid_edge": 10,
+    "brush_radius": 40,
+    "ink_path_mode": "skeleton",
+    "color_fill": "contour-wipe",
+    "canvas_hex": "#F5EBD7",
+    "target_hand_height": 493,
+    "match_bg": true,
+    "match_bg_threshold": 28
+  },
+  "timeline": {"lead_in_ms": 250, "gap_ms": 180, "gaze_ms": 600}
+}

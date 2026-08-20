@@ -1,0 +1,19 @@
+{
+  "name": "landscape-standard",
+  "description": "16:9 Full HD whiteboard preset",
+  "aspect_ratio": "16:9",
+  "canvas": {"width": 1920, "height": 1080},
+  "renderer": {
+    "fps": 30,
+    "cap_long_edge": 1920,
+    "grid_edge": 10,
+    "brush_radius": 40,
+    "ink_path_mode": "grid",
+    "color_fill": "contour-wipe",
+    "canvas_hex": "#F5EBD7",
+    "target_hand_height": 493,
+    "match_bg": true,
+    "match_bg_threshold": 28
+  },
+  "timeline": {"lead_in_ms": 250, "gap_ms": 180, "gaze_ms": 600}
+}
