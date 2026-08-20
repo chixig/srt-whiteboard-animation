@@ -12,7 +12,7 @@ from assemble_media import assemble_media
 from audio_mix import mix_audio
 from burn_subtitles import burn_subtitles
 from media_utils import ffmpeg_has_filter, probe_media
-from sfx_plan import collect_scene_sfx
+from sfx_plan import collect_scene_sfx, validate_sfx_fields
 from subtitle_ass import build_ass
 
 
@@ -34,6 +34,16 @@ class Phase4PureTests(unittest.TestCase):
         events = collect_scene_sfx(ann, "/tmp/project/scene.annotation.json", scene_offset_ms=2000)
         self.assertEqual([e["startMs"] for e in events], [2100, 2750])
         self.assertTrue(events[1]["file"].endswith("/tmp/project/hit.wav"))
+
+    def test_invalid_annotation_sfx_is_rejected(self):
+        ann = {
+            "sfx": [{"file": "", "startMs": -10, "gainDb": "loud"}],
+            "elements": [{"id": "hero", "reveal": {"startMs": 0}, "sfx": {"file": "hit.wav", "offsetMs": "soon"}}],
+        }
+        codes = [f["code"] for f in validate_sfx_fields(ann)]
+        self.assertIn("sfx.file_required", codes)
+        self.assertIn("sfx.invalid_time", codes)
+        self.assertIn("sfx.invalid_gain", codes)
 
 
 @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "ffmpeg/ffprobe required")
