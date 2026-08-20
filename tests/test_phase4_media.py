@@ -87,6 +87,18 @@ class Phase4RuntimeTests(unittest.TestCase):
         burn_subtitles(self.d / "video.mp4", srt, out, font="Arial")
         self.assertAlmostEqual(probe_media(out)["duration"], 1.6, delta=0.08)
 
+    def test_large_narration_mismatch_is_rejected(self):
+        with self.assertRaises(RuntimeError):
+            assemble_media(self.d / "video.mp4", self.d / "bad-narr.mp4",
+                           narration=self.d / "narr.wav", max_source_mismatch_ms=100)
+
+    def test_subtitle_overflow_is_rejected(self):
+        srt = self.d / "overflow.srt"
+        srt.write_text("1\n00:00:00,200 --> 00:00:03,000\nToo long\n", encoding="utf-8")
+        with self.assertRaises(RuntimeError):
+            assemble_media(self.d / "video.mp4", self.d / "bad-sub.mp4",
+                           subtitles=srt, max_source_mismatch_ms=100)
+
     def test_full_assembly_has_audio_and_keeps_duration(self):
         if not ffmpeg_has_filter("ass"):
             self.skipTest("ffmpeg has no ass/libass filter")
