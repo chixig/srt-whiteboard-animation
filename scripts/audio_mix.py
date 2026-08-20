@@ -47,6 +47,12 @@ def mix_audio(output: str | Path, *, duration: float, narration: str | Path | No
     output = Path(output); output.parent.mkdir(parents=True, exist_ok=True)
     ffmpeg = find_ffmpeg(); sfx_events = sfx_events or []
     _raise_invalid_sfx(sfx_events, scope="runtime SFX")
+    for label, value in (("narration", narration), ("bgm", bgm)):
+        if value and not Path(value).is_file():
+            raise FileNotFoundError(f"{label} 文件不存在: {value}")
+    missing_sfx = [str(event["file"]) for event in sfx_events if not Path(event["file"]).is_file()]
+    if missing_sfx:
+        raise FileNotFoundError("SFX 文件不存在: " + ", ".join(missing_sfx))
     if narration and bgm and not ffmpeg_has_filter("sidechaincompress", ffmpeg):
         raise RuntimeError("当前 ffmpeg 不支持 sidechaincompress，无法执行 BGM ducking；请安装完整系统 ffmpeg")
 
