@@ -79,6 +79,8 @@ def _parse_args(argv=None):
     p.add_argument("--bgm-gain-db", type=float, default=-18.0)
     p.add_argument("--duck-ratio", type=float, default=8.0)
     p.add_argument("--max-drift-ms", type=int, default=250)
+    p.add_argument("--max-source-mismatch-ms", type=int, default=1500,
+                   help="旁白/字幕与画面允许的源时长差；负数禁用源素材时长保护")
     p.add_argument("--timeline-mode", choices=["sequence", "startMs"], default="sequence")
     p.add_argument("--no-retime", action="store_true")
     p.add_argument("--ink-path", choices=["grid", "skeleton"])
@@ -196,7 +198,8 @@ def main(argv=None) -> int:
         if args.subtitle_margin_v: assembly_cmd += ["--subtitle-margin-v", str(args.subtitle_margin_v)]
         assembly_cmd += ["--narration-gain-db", str(args.narration_gain_db),
                          "--bgm-gain-db", str(args.bgm_gain_db), "--duck-ratio", str(args.duck_ratio),
-                         "--max-drift-ms", str(args.max_drift_ms)]
+                         "--max-drift-ms", str(args.max_drift_ms),
+                         "--max-source-mismatch-ms", str(args.max_source_mismatch_ms)]
         if not args.dry_run:
             try:
                 _run(assembly_cmd)
@@ -214,7 +217,8 @@ def main(argv=None) -> int:
         "sourceDir": str(source_dir), "profile": args.profile, "timelineMode": args.timeline_mode,
         "sceneCount": len(scenes), "scenes": scene_meta, "narration": args.narration,
         "bgm": args.bgm, "subtitles": args.subtitles, "sfxEventCount": len(all_sfx),
-        "sfxPlan": str(combined_sfx_path) if all_sfx else None, "output": str(out),
+        "sfxPlan": str(combined_sfx_path) if all_sfx else None,
+        "maxSourceMismatchMs": args.max_source_mismatch_ms, "output": str(out),
     }
     manifest_path = Path(args.manifest) if args.manifest else out.with_suffix(".manifest.json")
     if not args.dry_run:
