@@ -13,13 +13,21 @@ from burn_subtitles import burn_subtitles
 from media_utils import probe_media
 from mux_audio import mux_audio
 from parse_srt import parse_srt
+from sfx_plan import normalize_sfx_events, validate_sfx_events
+
+
+def _raise_sfx_errors(events: list[dict]) -> None:
+    findings = validate_sfx_events(events, scope="final assembly SFX")
+    errors = [f for f in findings if f["severity"] == "error"]
+    if errors:
+        details = "; ".join(f"{f['code']}: {f['message']}" for f in errors)
+        raise ValueError(details)
 
 
 def _validate_source_timing(*, duration: float, narration: str | Path | None,
-                            subtitles: str | Path | None, max_source_mismatch_ms: int) -> None:
-    if max_source_mismatch_ms < 0:
-        return
-    if narration:
+                            subtitles: str | Path | None, sfx_events: list[dict],
+                            max_source_mismatch_ms: int) -> None:
+    if max_source_mismatch_ms >= 0 and narration:
         narr_duration = float(probe_media(narration)["duration"])
         delta_ms = abs(narr_duration - duration) * 1000.0
         print(f"[timing] visual={duration:.3f}s narration={narr_duration:.3f}s delta={delta_ms:.0f}ms")
@@ -28,18 +36,23 @@ def _validate_source_timing(*, duration: float, narration: str | Path | None,
                 f"旁白与画面时长相差 {delta_ms:.0f}ms，超过源素材阈值 {max_source_mismatch_ms}ms；"
                 "拒绝静默截断/大段补静音"
             )
-    if subtitles:
+    if max_source_mismatch_ms >= 0 and subtitles:
         raw = Path(subtitles).read_text(encoding="utf-8-sig")
         cues = parse_srt(raw)
         if not cues:
             raise RuntimeError("字幕文件未解析到有效 SRT cue")
-        subtitle_end = float(cues[-1]["endMs"]) / 1000.0
+        subtitle_end = max(float(cue["endMs"]) for cue in cues) / 1000.0
         overflow_ms = max(0.0, subtitle_end - duration) * 1000.0
         print(f"[timing] visual={duration:.3f}s subtitle_end={subtitle_end:.3f}s overflow={overflow_ms:.0f}ms")
         if overflow_ms > max_source_mismatch_ms:
             raise RuntimeError(
                 f"字幕最后时间点超出画面 {overflow_ms:.0f}ms，超过源素材阈值 {max_source_mismatch_ms}ms"
             )
+    video_end_ms = duration * 1000.0
+    late = [event for event in sfx_events if float(event.get("startMs", 0) or 0) >= video_end_ms]
+    if late:
+        sample = ", ".join(f"{Path(str(e.get('file', ''))).name}@{float(e.get('startMs', 0)):.0f}ms" for e in late[:5])
+        raise RuntimeError(f"{len(late)} 个 SFX 起点位于视频结束时间 {video_end_ms:.0f}ms 之后或正好结束处: {sample}")
 
 
 def assemble_media(video: str | Path, output: str | Path, *, narration: str | Path | None = None,
@@ -53,10 +66,12 @@ def assemble_media(video: str | Path, output: str | Path, *, narration: str | Pa
     source_info = probe_media(video); duration = float(source_info["duration"])
     if duration <= 0:
         raise RuntimeError("无法取得视频时长")
-    _validate_source_timing(duration=duration, narration=narration, subtitles=subtitles,
-                            max_source_mismatch_ms=max_source_mismatch_ms)
     plan_events = load_sfx_plan(sfx_plan)
-    sfx_events = list(plan_events) + list(sfx_events or [])
+    combined_sfx = list(plan_events) + list(sfx_events or [])
+    _raise_sfx_errors(combined_sfx)
+    sfx_events = normalize_sfx_events(combined_sfx)
+    _validate_source_timing(duration=duration, narration=narration, subtitles=subtitles,
+                            sfx_events=sfx_events, max_source_mismatch_ms=max_source_mismatch_ms)
     needs_audio = bool(narration or bgm or sfx_events)
 
     with tempfile.TemporaryDirectory(prefix="whiteboard-final-") as td:
